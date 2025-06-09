@@ -1,12 +1,46 @@
 import discord
 from discord.ext import commands
 import random
+import json
+from threading import Thread
+from flask import Flask
 
-# Assuming your bot & balance functions are defined as before
+# ------------------ BALANCE MANAGEMENT ------------------
+
+BALANCE_FILE = "balances.json"
+
+def load_balances():
+    try:
+        with open(BALANCE_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_balances(balances):
+    with open(BALANCE_FILE, "w") as f:
+        json.dump(balances, f)
+
+def get_balance(user_id):
+    balances = load_balances()
+    return balances.get(str(user_id), 1000)  # Default 1000 coins if new user
+
+def set_balance(user_id, amount):
+    balances = load_balances()
+    balances[str(user_id)] = amount
+    save_balances(balances)
+
+# ------------------ DISCORD BOT SETUP ------------------
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="-", intents=intents)
+
+# ------------------ COIN FLIP BUTTONS ------------------
 
 class CoinFlipView(discord.ui.View):
     def __init__(self, user_id: int, bet_amount: int):
-        super().__init__(timeout=30)  # buttons timeout after 30 seconds
+        super().__init__(timeout=30)
         self.user_id = user_id
         self.bet_amount = bet_amount
         self.has_responded = False
@@ -59,7 +93,6 @@ class CoinFlipView(discord.ui.View):
             return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
         await self.update_balance_and_send_result(interaction, "tails")
 
-
 @bot.command()
 async def cf(ctx, amount: int):
     user_id = ctx.author.id
@@ -72,3 +105,32 @@ async def cf(ctx, amount: int):
 
     view = CoinFlipView(user_id, amount)
     await ctx.send(f"{ctx.author.mention}, choose Heads or Tails to flip the coin and bet **{amount}** coins!", view=view)
+
+# ------------------ BALANCE CHECK COMMAND ------------------
+
+@bot.command()
+async def bal(ctx, member: discord.Member = None):
+    if member is None:
+        member = ctx.author
+    balance = get_balance(member.id)
+    await ctx.send(f"{member.display_name} has 💰 **{balance} coins**.")
+
+# ------------------ KEEP ALIVE (FLASK) ------------------
+
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "I'm alive!"
+
+def run():
+    app.run(host="0.0.0.0", port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+# ------------------ RUN BOT ------------------
+
+keep_alive()
+bot.run("YOUR_BOT_TOKEN_HERE")  # Replace with your actual bot token
