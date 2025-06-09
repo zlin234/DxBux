@@ -116,7 +116,7 @@ async def bal(ctx, member: discord.Member = None):
     balance = get_balance(member.id)
     await ctx.send(f"{member.display_name} has 💰 **{balance} coins**.")
 
-# ------------------ ADMIN SETBAL COMMAND ------------------
+# ------------------ ADMIN CHECK DECORATOR ------------------
 
 def is_admin():
     async def predicate(ctx):
@@ -127,9 +127,11 @@ def is_admin():
         return False
     return commands.check(predicate)
 
+# ------------------ ADMIN SETBAL COMMAND ------------------
+
 @bot.command(aliases=["setbalance", "setbal"])
 @is_admin()
-async def setbal(ctx, member: discord.Member, amount: int):
+async def admin_setbal(ctx, member: discord.Member, amount: int):
     if amount < 0:
         return await ctx.send("❌ Balance cannot be negative.")
     set_balance(member.id, amount)
@@ -139,7 +141,6 @@ async def setbal(ctx, member: discord.Member, amount: int):
 
 @bot.command()
 async def bj(ctx, amount: int):
-    # Placeholder for blackjack game logic
     user_id = ctx.author.id
     current_balance = get_balance(user_id)
     if amount <= 0:
@@ -153,7 +154,6 @@ async def bj(ctx, amount: int):
 
 @bot.command()
 async def minesweeper(ctx, amount: int):
-    # Placeholder for minesweeper game logic
     user_id = ctx.author.id
     current_balance = get_balance(user_id)
     if amount <= 0:
