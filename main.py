@@ -83,13 +83,13 @@ class CoinFlipView(discord.ui.View):
         )
 
     @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary)
-    async def heads_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def heads_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
         await self.update_balance_and_send_result(interaction, "heads")
 
     @discord.ui.button(label="Tails", style=discord.ButtonStyle.secondary)
-    async def tails_button(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def tails_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
         await self.update_balance_and_send_result(interaction, "tails")
