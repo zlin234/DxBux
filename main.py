@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import random
 import json
+import os
 from threading import Thread
 from flask import Flask
 
@@ -133,4 +134,4 @@ def keep_alive():
 # ------------------ RUN BOT ------------------
 
 keep_alive()
-bot.run("YOUR_BOT_TOKEN_HERE")  # Replace with your actual bot token
+bot.run(os.getenv("DISCORD_TOKEN"))
