@@ -2,13 +2,13 @@ import discord
 from discord.ext import commands, tasks
 import json
 import os
-import asyncio
+import random
 
 # ------------------ BOT SETUP ------------------
 
 intents = discord.Intents.default()
-intents.message_content = True  # Required to read message content
-intents.members = True  # Required to access member information
+intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix='-', intents=intents)
 
@@ -29,7 +29,7 @@ def save_balances(balances):
 
 def get_balance(user_id):
     balances = load_balances()
-    return balances.get(str(user_id), 1000)  # Default starting balance
+    return balances.get(str(user_id), 1000)
 
 def set_balance(user_id, amount):
     balances = load_balances()
@@ -52,11 +52,7 @@ def is_admin():
 
 @bot.command(aliases=["setbalance"])
 @is_admin()
-async def setbal(ctx, member: discord.Member = None, amount: int = None):
-    if amount is None:
-        await ctx.send("❌ Please specify the amount.")
-        return
-
+async def setbal(ctx, amount: int, member: discord.Member = None):
     if amount < 0:
         await ctx.send("❌ Amount must be 0 or more.")
         return
@@ -78,6 +74,24 @@ async def balance(ctx, member: discord.Member = None):
     bal = get_balance(member.id)
     await ctx.send(f"💰 {member.display_name}'s balance: {bal} coins.")
 
+@bot.command()
+async def cf(ctx, amount: int):
+    bal = get_balance(ctx.author.id)
+    if amount <= 0:
+        await ctx.send("❌ Bet must be greater than zero.")
+        return
+    if amount > bal:
+        await ctx.send("❌ You don't have enough coins to bet that much.")
+        return
+
+    result = random.choice(["heads", "tails"])
+    if result == "heads":
+        add_balance(ctx.author.id, amount)
+        await ctx.send(f"🎉 You won! The coin landed on {result}. You gained {amount} coins!")
+    else:
+        add_balance(ctx.author.id, -amount)
+        await ctx.send(f"😢 You lost! The coin landed on {result}. You lost {amount} coins.")
+
 # ------------------ DAILY ALLOWANCE ------------------
 
 @tasks.loop(hours=24)
@@ -93,7 +107,7 @@ async def daily_allowance():
 async def before_daily_allowance():
     await bot.wait_until_ready()
 
-# ------------------ BOT EVENTS ------------------
+# ------------------ EVENTS ------------------
 
 @bot.event
 async def on_ready():
