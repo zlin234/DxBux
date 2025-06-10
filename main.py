@@ -107,10 +107,20 @@ async def cf(ctx, amount: int):
 
 # ------------------ BALANCE CHECK ------------------
 
-@bot.command(aliases=["balance"])
-async def bal(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    await ctx.send(f"{member.display_name} has 💰 **{get_balance(member.id)} coins**.")
+@bot.command(aliases=["setbalance"])
+@is_admin()
+async def setbal(ctx, member: discord.Member = None, amount: int = None):
+    if member and amount is not None:
+        set_balance(member.id, amount)
+        await ctx.send(f"✅ Set {member.display_name}'s balance to **{amount} coins**.")
+    elif member is None and amount is not None:
+        balances = load_balances()
+        for uid in balances:
+            balances[uid] = balances.get(uid, 1000) + amount
+        save_balances(balances)
+        await ctx.send(f"✅ Added **{amount} coins** to all known users.")
+    else:
+        await ctx.send("❌ Usage: `-setbal @user amount` or `-setbal amount` to add to all.")
 
 # ------------------ ADMIN SETBAL ------------------
 
