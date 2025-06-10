@@ -6,6 +6,7 @@ import json
 from threading import Thread
 from flask import Flask
 from datetime import datetime, timedelta
+import typing
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
@@ -33,10 +34,22 @@ def set_balance(user_id, amount):
     balances[str(user_id)] = amount
     save_data(balances, BALANCE_FILE)
 
+def add_balance(user_id, amount):
+    balances = load_data(BALANCE_FILE)
+    current = balances.get(str(user_id), 1000)
+    balances[str(user_id)] = current + amount
+    save_data(balances, BALANCE_FILE)
+
 def set_all_balances(amount):
     balances = load_data(BALANCE_FILE)
     for user_id in balances:
         balances[user_id] = amount
+    save_data(balances, BALANCE_FILE)
+
+def add_all_balances(amount):
+    balances = load_data(BALANCE_FILE)
+    for user_id in balances:
+        balances[user_id] = balances.get(user_id, 1000) + amount
     save_data(balances, BALANCE_FILE)
 
 def can_claim_daily(user_id):
@@ -54,8 +67,7 @@ def claim_daily(user_id):
     daily_data[str(user_id)] = datetime.now().isoformat()
     save_data(daily_data, DAILY_FILE)
     
-    current_balance = get_balance(user_id)
-    set_balance(user_id, current_balance + DAILY_AMOUNT)
+    add_balance(user_id, DAILY_AMOUNT)
 
 # ------------------ DISCORD BOT SETUP ------------------
 
@@ -186,22 +198,80 @@ def is_admin():
 
 @bot.command(aliases=["setbalance", "setbal"])
 @is_admin()
-async def admin_setbal(ctx, member: discord.Member = None, amount: int = None):
+async def admin_setbal(ctx, member: typing.Optional[discord.Member] = None, *, amount: str = None):
     if amount is None:
         return await ctx.send("❌ Please specify an amount.")
-    if amount < 0:
+    
+    try:
+        amount_int = int(amount)
+    except ValueError:
+        # Maybe the amount was provided first without member mention
+        if member is None:
+            try:
+                amount_int = int(amount.split()[0])
+            except (ValueError, IndexError):
+                return await ctx.send("❌ Please provide a valid amount.")
+            
+            # Try to parse as member
+            try:
+                member_name = ' '.join(amount.split()[1:])
+                if member_name:
+                    member = await commands.MemberConverter().convert(ctx, member_name)
+            except commands.MemberNotFound:
+                pass
+    
+    if amount_int < 0:
         return await ctx.send("❌ Balance cannot be negative.")
     
     if member is None:
         # Set balance for all users
-        set_all_balances(amount)
-        await ctx.send(f"✅ Set everyone's balance to **{amount} coins**.")
+        set_all_balances(amount_int)
+        await ctx.send(f"✅ Set everyone's balance to **{amount_int} coins**.")
     else:
         # Set balance for specific user
-        set_balance(member.id, amount)
-        await ctx.send(f"✅ Set {member.display_name}'s balance to **{amount} coins**.")
+        set_balance(member.id, amount_int)
+        await ctx.send(f"✅ Set {member.display_name}'s balance to **{amount_int} coins**.")
 
-# ------------------ BLACKJACK (Stub) ------------------
+# ------------------ ADMIN ADD COMMAND ------------------
+
+@bot.command(aliases=["addbal"])
+@is_admin()
+async def admin_add(ctx, member: typing.Optional[discord.Member] = None, *, amount: str = None):
+    if amount is None:
+        return await ctx.send("❌ Please specify an amount.")
+    
+    try:
+        amount_int = int(amount)
+    except ValueError:
+        # Maybe the amount was provided first without member mention
+        if member is None:
+            try:
+                amount_int = int(amount.split()[0])
+            except (ValueError, IndexError):
+                return await ctx.send("❌ Please provide a valid amount.")
+            
+            # Try to parse as member
+            try:
+                member_name = ' '.join(amount.split()[1:])
+                if member_name:
+                    member = await commands.MemberConverter().convert(ctx, member_name)
+            except commands.MemberNotFound:
+                pass
+    
+    if member is None:
+        # Add to all users
+        add_all_balances(amount_int)
+        await ctx.send(f"✅ Added **{amount_int} coins** to everyone's balance.")
+    else:
+        # Add to specific user
+        add_balance(member.id, amount_int)
+        new_balance = get_balance(member.id)
+        await ctx.send(
+            f"✅ Added **{amount_int} coins** to {member.display_name}'s balance.\n"
+            f"💰 New balance: **{new_balance} coins**."
+        )
+
+# ------------------ GAME COMMANDS (Stubs) ------------------
 
 @bot.command()
 async def bj(ctx, amount: int):
@@ -211,10 +281,7 @@ async def bj(ctx, amount: int):
         return await ctx.send("❌ Bet must be more than 0.")
     if current_balance < amount:
         return await ctx.send("❌ You don't have enough balance.")
-    # TODO: Implement blackjack logic here
     await ctx.send(f"Blackjack is not implemented yet, but you tried to bet {amount} coins!")
-
-# ------------------ MINESWEEPER (Stub) ------------------
 
 @bot.command()
 async def minesweeper(ctx, amount: int):
@@ -224,7 +291,6 @@ async def minesweeper(ctx, amount: int):
         return await ctx.send("❌ Bet must be more than 0.")
     if current_balance < amount:
         return await ctx.send("❌ You don't have enough balance.")
-    # TODO: Implement minesweeper logic here
     await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
