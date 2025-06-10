@@ -5,7 +5,6 @@ import random
 import json
 from threading import Thread
 from flask import Flask
-from datetime import datetime
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
@@ -44,7 +43,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="-", intents=intents)
 
-# ------------------ COIN FLIP BUTTONS ------------------
+# ------------------ COIN FLIP VIEW ------------------
 
 class CoinFlipView(discord.ui.View):
     def __init__(self, user_id: int, bet_amount: int):
@@ -64,133 +63,114 @@ class CoinFlipView(discord.ui.View):
 
         current_balance = get_balance(self.user_id)
         if self.bet_amount > current_balance:
-            await interaction.response.send_message("Not enough balance!", ephemeral=True)
+            await interaction.response.send_message("You don't have enough balance!", ephemeral=True)
             await self.disable_all_items()
             await interaction.message.edit(view=self)
             return
 
         result = random.choice(["heads", "tails"])
-        if result == user_choice:
-            new_balance = current_balance + self.bet_amount
-            outcome = f"🎉 It was **{result}**! You **won** {self.bet_amount} coins!"
-        else:
-            new_balance = current_balance - self.bet_amount
-            outcome = f"😢 It was **{result}**. You **lost** {self.bet_amount} coins."
+        won = result == user_choice
 
+        new_balance = current_balance + self.bet_amount if won else current_balance - self.bet_amount
         set_balance(self.user_id, new_balance)
+        outcome = f"🎉 It was **{result.capitalize()}**! You **won** {self.bet_amount} coins!" if won else f"😢 It was **{result.capitalize()}**. You **lost** {self.bet_amount} coins."
+
         self.has_responded = True
         await self.disable_all_items()
         await interaction.message.edit(view=self)
-
         await interaction.response.send_message(
-            f"{interaction.user.mention} {outcome} Your new balance: **{new_balance} coins**."
+            f"{interaction.user.mention} {outcome} Your new balance is **{new_balance} coins**."
         )
 
     @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary)
     async def heads_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("Not your coin flip!", ephemeral=True)
+            return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
         await self.update_balance_and_send_result(interaction, "heads")
 
     @discord.ui.button(label="Tails", style=discord.ButtonStyle.secondary)
     async def tails_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("Not your coin flip!", ephemeral=True)
+            return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
         await self.update_balance_and_send_result(interaction, "tails")
 
 @bot.command()
 async def cf(ctx, amount: int):
-    if amount <= 0:
-        return await ctx.send("❌ Bet must be greater than 0.")
-    if get_balance(ctx.author.id) < amount:
-        return await ctx.send("❌ Insufficient balance.")
-    view = CoinFlipView(ctx.author.id, amount)
-    await ctx.send(f"{ctx.author.mention}, choose Heads or Tails to bet **{amount}** coins!", view=view)
-
-# ------------------ BALANCE COMMANDS ------------------
-
-@bot.command(aliases=["balance"])
-async def bal(ctx, member: discord.Member = None):
-    member = member or ctx.author
-    await ctx.send(f"{member.display_name} has 💰 **{get_balance(member.id)} coins**.")
-
-# ------------------ ADMIN SETBAL COMMAND ------------------
-
-def is_admin():
-    async def predicate(ctx):
-        role = discord.utils.get(ctx.guild.roles, name="Admin")
-        if role and role in ctx.author.roles:
-            return True
-        await ctx.send("❌ You need the Admin role.")
-        return False
-    return commands.check(predicate)
-
-@bot.command()
-@is_admin()
-async def setbal(ctx, amount: int, member: discord.Member = None):
-    if amount < 0:
-        return await ctx.send("❌ Balance can't be negative.")
-    if member:
-        set_balance(member.id, amount)
-        return await ctx.send(f"✅ Set {member.display_name}'s balance to {amount} coins.")
-    else:
-        balances = load_balances()
-        for user_id in balances:
-            set_balance(user_id, amount)
-        await ctx.send(f"✅ Set **all user balances** to {amount} coins.")
-
-# ------------------ BLACKJACK vs NPC ------------------
-
-@bot.command()
-async def bj(ctx, amount: int):
     user_id = ctx.author.id
     if amount <= 0:
         return await ctx.send("❌ Bet must be more than 0.")
     if get_balance(user_id) < amount:
         return await ctx.send("❌ Not enough balance.")
 
-    user_card = random.randint(1, 11) + random.randint(1, 11)
-    npc_card = random.randint(1, 11) + random.randint(1, 11)
+    view = CoinFlipView(user_id, amount)
+    await ctx.send(f"{ctx.author.mention}, choose Heads or Tails to bet **{amount}** coins!", view=view)
 
-    result = f"You: {user_card} | NPC: {npc_card}\n"
-    if user_card > npc_card:
-        add_balance(user_id, amount)
-        result += f"🎉 You win! You earned {amount} coins."
-    elif user_card < npc_card:
-        add_balance(user_id, -amount)
-        result += f"😢 You lost! You lost {amount} coins."
+# ------------------ BALANCE CHECK ------------------
+
+@bot.command(aliases=["balance"])
+async def bal(ctx, member: discord.Member = None):
+    member = member or ctx.author
+    await ctx.send(f"{member.display_name} has 💰 **{get_balance(member.id)} coins**.")
+
+# ------------------ ADMIN SETBAL ------------------
+
+def is_admin():
+    async def predicate(ctx):
+        return discord.utils.get(ctx.author.roles, name="Admin") is not None
+    return commands.check(predicate)
+
+@bot.command(aliases=["setbalance"])
+@is_admin()
+async def setbal(ctx, amount: int, member: discord.Member = None):
+    if member:
+        set_balance(member.id, amount)
+        await ctx.send(f"✅ Set {member.display_name}'s balance to {amount} coins.")
     else:
-        result += "⚖️ It's a tie! No coins lost or won."
+        balances = load_balances()
+        for uid in balances:
+            balances[uid] = balances.get(uid, 1000) + amount
+        save_balances(balances)
+        await ctx.send(f"✅ Added {amount} coins to all known users' balances.")
 
-    await ctx.send(result)
+# ------------------ BLACKJACK STUB ------------------
 
-# ------------------ MINESWEEPER (stub) ------------------
+@bot.command()
+async def bj(ctx, amount: int):
+    user_id = ctx.author.id
+    if amount <= 0:
+        return await ctx.send("❌ Invalid bet.")
+    if get_balance(user_id) < amount:
+        return await ctx.send("❌ Not enough balance.")
+    # Future: Add Blackjack NPC logic
+    await ctx.send(f"🃏 Blackjack vs NPC coming soon! You tried to bet {amount} coins.")
+
+# ------------------ MINESWEEPER STUB ------------------
 
 @bot.command()
 async def minesweeper(ctx, amount: int):
+    user_id = ctx.author.id
     if amount <= 0:
-        return await ctx.send("❌ Bet must be more than 0.")
-    if get_balance(ctx.author.id) < amount:
+        return await ctx.send("❌ Invalid bet.")
+    if get_balance(user_id) < amount:
         return await ctx.send("❌ Not enough balance.")
-    await ctx.send("💣 Minesweeper is coming soon!")
+    await ctx.send(f"💣 Minesweeper coming soon! You tried to bet {amount} coins.")
 
 # ------------------ DAILY ALLOWANCE ------------------
 
 @tasks.loop(hours=24)
 async def daily_allowance():
+    print("Giving daily allowance...")
     balances = load_balances()
-    for user_id in balances:
-        balances[user_id] += 100
+    for uid in balances:
+        balances[uid] += 100
     save_balances(balances)
-    print("✅ Daily allowance of 100 coins given to all users.")
 
-@daily_allowance.before_loop
-async def before_daily():
-    await bot.wait_until_ready()
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user}")
+    daily_allowance.start()
 
-daily_allowance.start()
-
-# ------------------ KEEP ALIVE (RENDER FLASK) ------------------
+# ------------------ KEEP ALIVE ------------------
 
 app = Flask("")
 
@@ -205,7 +185,7 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# ------------------ RUN BOT ------------------
+# ------------------ RUN ------------------
 
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
