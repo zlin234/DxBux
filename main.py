@@ -5,69 +5,30 @@ import random
 import json
 from threading import Thread
 from flask import Flask
-from datetime import datetime, timedelta
-import typing
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
 BALANCE_FILE = "balances.json"
-DAILY_FILE = "daily.json"
-DAILY_AMOUNT = 100  # Daily allowance amount
 
-def load_data(filename):
+def load_balances():
     try:
-        with open(filename, "r") as f:
+        with open(BALANCE_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
         return {}
 
-def save_data(data, filename):
-    with open(filename, "w") as f:
-        json.dump(data, f, indent=4)
+def save_balances(balances):
+    with open(BALANCE_FILE, "w") as f:
+        json.dump(balances, f)
 
 def get_balance(user_id):
-    balances = load_data(BALANCE_FILE)
+    balances = load_balances()
     return balances.get(str(user_id), 1000)  # Default 1000 coins if new user
 
 def set_balance(user_id, amount):
-    balances = load_data(BALANCE_FILE)
+    balances = load_balances()
     balances[str(user_id)] = amount
-    save_data(balances, BALANCE_FILE)
-
-def add_balance(user_id, amount):
-    balances = load_data(BALANCE_FILE)
-    current = balances.get(str(user_id), 1000)
-    balances[str(user_id)] = current + amount
-    save_data(balances, BALANCE_FILE)
-
-def set_all_balances(amount):
-    balances = load_data(BALANCE_FILE)
-    for user_id in balances:
-        balances[user_id] = amount
-    save_data(balances, BALANCE_FILE)
-
-def add_all_balances(amount):
-    balances = load_data(BALANCE_FILE)
-    for user_id in balances:
-        balances[user_id] = balances.get(user_id, 1000) + amount
-    save_data(balances, BALANCE_FILE)
-
-def can_claim_daily(user_id):
-    daily_data = load_data(DAILY_FILE)
-    user_id_str = str(user_id)
-    
-    if user_id_str not in daily_data:
-        return True
-    
-    last_claim = datetime.fromisoformat(daily_data[user_id_str])
-    return datetime.now() > last_claim + timedelta(hours=24)
-
-def claim_daily(user_id):
-    daily_data = load_data(DAILY_FILE)
-    daily_data[str(user_id)] = datetime.now().isoformat()
-    save_data(daily_data, DAILY_FILE)
-    
-    add_balance(user_id, DAILY_AMOUNT)
+    save_balances(balances)
 
 # ------------------ DISCORD BOT SETUP ------------------
 
@@ -146,34 +107,6 @@ async def cf(ctx, amount: int):
     view = CoinFlipView(user_id, amount)
     await ctx.send(f"{ctx.author.mention}, choose Heads or Tails to flip the coin and bet **{amount}** coins!", view=view)
 
-# ------------------ DAILY COMMAND ------------------
-
-@bot.command()
-async def daily(ctx):
-    user_id = ctx.author.id
-    
-    if not can_claim_daily(user_id):
-        daily_data = load_data(DAILY_FILE)
-        last_claim = datetime.fromisoformat(daily_data[str(user_id)])
-        next_claim = last_claim + timedelta(hours=24)
-        time_left = next_claim - datetime.now()
-        
-        hours = time_left.seconds // 3600
-        minutes = (time_left.seconds % 3600) // 60
-        seconds = time_left.seconds % 60
-        
-        return await ctx.send(
-            f"❌ You've already claimed your daily allowance today!\n"
-            f"⏳ You can claim again in {hours}h {minutes}m {seconds}s."
-        )
-    
-    claim_daily(user_id)
-    new_balance = get_balance(user_id)
-    await ctx.send(
-        f"✅ You've claimed your daily **{DAILY_AMOUNT} coins**!\n"
-        f"💰 Your new balance is **{new_balance} coins**."
-    )
-
 # ------------------ BALANCE CHECK COMMANDS ------------------
 
 @bot.command(aliases=["balance"])
@@ -187,7 +120,7 @@ async def bal(ctx, member: discord.Member = None):
 
 def is_admin():
     async def predicate(ctx):
-        admin_role = discord.utils.get(ctx.guild.roles, name="Admin")
+        admin_role = discord.utils.get(ctx.guild.roles, name="carrot")
         if admin_role in ctx.author.roles:
             return True
         await ctx.send("❌ You need the Admin role to use this command.")
@@ -198,80 +131,13 @@ def is_admin():
 
 @bot.command(aliases=["setbalance", "setbal"])
 @is_admin()
-async def admin_setbal(ctx, member: typing.Optional[discord.Member] = None, *, amount: str = None):
-    if amount is None:
-        return await ctx.send("❌ Please specify an amount.")
-    
-    try:
-        amount_int = int(amount)
-    except ValueError:
-        # Maybe the amount was provided first without member mention
-        if member is None:
-            try:
-                amount_int = int(amount.split()[0])
-            except (ValueError, IndexError):
-                return await ctx.send("❌ Please provide a valid amount.")
-            
-            # Try to parse as member
-            try:
-                member_name = ' '.join(amount.split()[1:])
-                if member_name:
-                    member = await commands.MemberConverter().convert(ctx, member_name)
-            except commands.MemberNotFound:
-                pass
-    
-    if amount_int < 0:
+async def admin_setbal(ctx, member: discord.Member, amount: int):
+    if amount < 0:
         return await ctx.send("❌ Balance cannot be negative.")
-    
-    if member is None:
-        # Set balance for all users
-        set_all_balances(amount_int)
-        await ctx.send(f"✅ Set everyone's balance to **{amount_int} coins**.")
-    else:
-        # Set balance for specific user
-        set_balance(member.id, amount_int)
-        await ctx.send(f"✅ Set {member.display_name}'s balance to **{amount_int} coins**.")
+    set_balance(member.id, amount)
+    await ctx.send(f"✅ Set {member.display_name}'s balance to **{amount} coins**.")
 
-# ------------------ ADMIN ADD COMMAND ------------------
-
-@bot.command(aliases=["addbal"])
-@is_admin()
-async def admin_add(ctx, member: typing.Optional[discord.Member] = None, *, amount: str = None):
-    if amount is None:
-        return await ctx.send("❌ Please specify an amount.")
-    
-    try:
-        amount_int = int(amount)
-    except ValueError:
-        # Maybe the amount was provided first without member mention
-        if member is None:
-            try:
-                amount_int = int(amount.split()[0])
-            except (ValueError, IndexError):
-                return await ctx.send("❌ Please provide a valid amount.")
-            
-            # Try to parse as member
-            try:
-                member_name = ' '.join(amount.split()[1:])
-                if member_name:
-                    member = await commands.MemberConverter().convert(ctx, member_name)
-            except commands.MemberNotFound:
-                pass
-    
-    if member is None:
-        # Add to all users
-        add_all_balances(amount_int)
-        await ctx.send(f"✅ Added **{amount_int} coins** to everyone's balance.")
-    else:
-        # Add to specific user
-        add_balance(member.id, amount_int)
-        new_balance = get_balance(member.id)
-        await ctx.send(
-            f"✅ Added **{amount_int} coins** to {member.display_name}'s balance.\n"
-            f"💰 New balance: **{new_balance} coins**."
-        )
-
-# ------------------ GAME COMMANDS (Stubs) ------------------
+# ------------------ BLACKJACK (Stub) ------------------
 
 @bot.command()
 async def bj(ctx, amount: int):
@@ -281,7 +147,10 @@ async def bj(ctx, amount: int):
         return await ctx.send("❌ Bet must be more than 0.")
     if current_balance < amount:
         return await ctx.send("❌ You don't have enough balance.")
+    # TODO: Implement blackjack logic here
     await ctx.send(f"Blackjack is not implemented yet, but you tried to bet {amount} coins!")
+
+# ------------------ MINESWEEPER (Stub) ------------------
 
 @bot.command()
 async def minesweeper(ctx, amount: int):
@@ -291,6 +160,7 @@ async def minesweeper(ctx, amount: int):
         return await ctx.send("❌ Bet must be more than 0.")
     if current_balance < amount:
         return await ctx.send("❌ You don't have enough balance.")
+    # TODO: Implement minesweeper logic here
     await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
