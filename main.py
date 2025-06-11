@@ -361,10 +361,12 @@ async def checkall(ctx):
         b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
         plan = b_data["plan"] or "None"
         deposited = b_data["deposited"]
-        output.append(f"{user_id}:{wallet}:{plan}:{deposited}")
+        # Use pipe (|) as delimiter instead of colon
+        output.append(f"{user_id}|{wallet}|{plan}|{deposited}")
     
     data = "\n".join(output)
-    await ctx.send(f"```{data}```")
+    # Use a code block with specific language to prevent formatting issues
+    await ctx.send(f"```data\n{data}```")
 
 @bot.command()
 @is_admin()
@@ -373,6 +375,9 @@ async def setall(ctx, *, data: str):
     # Remove code block markers if present
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
+        # Remove optional language specifier
+        if data.startswith('data\n'):
+            data = data[5:]
     
     lines = data.split('\n')
     balances = {}
@@ -382,7 +387,8 @@ async def setall(ctx, *, data: str):
         if not line.strip():
             continue
             
-        parts = line.split(':')
+        # Split using pipe delimiter
+        parts = line.split('|')
         if len(parts) != 4:
             continue
             
