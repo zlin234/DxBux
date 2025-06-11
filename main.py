@@ -9,6 +9,7 @@ from flask import Flask
 # ------------------ BALANCE MANAGEMENT ------------------
 
 BALANCE_FILE = "balances.json"
+BANK_FILE = "bank_data.json"
 
 def load_balances():
     try:
@@ -30,12 +31,207 @@ def set_balance(user_id, amount):
     balances[str(user_id)] = amount
     save_balances(balances)
 
+# ------------------ BANK MANAGEMENT ------------------
+
+def load_bank_data():
+    try:
+        with open(BANK_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_bank_data(bank_data):
+    with open(BANK_FILE, "w") as f:
+        json.dump(bank_data, f)
+
+def get_bank_data(user_id):
+    bank_data = load_bank_data()
+    if str(user_id) not in bank_data:
+        bank_data[str(user_id)] = {
+            "plan": None,
+            "deposited": 0
+        }
+        save_bank_data(bank_data)
+    return bank_data[str(user_id)]
+
+def update_bank_data(user_id, data):
+    bank_data = load_bank_data()
+    bank_data[str(user_id)] = data
+    save_bank_data(bank_data)
+
+# Bank plans with interest rates and minimum balances
+BANK_PLANS = {
+    "basic": {
+        "name": "Basic",
+        "min_deposit": 0,
+        "interest": 0.01,  # 1% interest
+        "description": "1% interest, no minimum balance"
+    },
+    "premium": {
+        "name": "Premium",
+        "min_deposit": 5000,
+        "interest": 0.03,  # 3% interest
+        "description": "3% interest, requires 5,000 coin minimum"
+    },
+    "vip": {
+        "name": "VIP",
+        "min_deposit": 15000,
+        "interest": 0.05,  # 5% interest
+        "description": "5% interest, requires 15,000 coin minimum"
+    }
+}
+
 # ------------------ DISCORD BOT SETUP ------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="-", intents=intents)
+
+# ------------------ BANK COMMANDS ------------------
+
+class BankPlanView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=30)
+        self.user_id = user_id
+        
+    async def disable_all_items(self):
+        for item in self.children:
+            item.disabled = True
+            
+    @discord.ui.button(label="Basic", style=discord.ButtonStyle.primary)
+    async def basic_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your bank selection!", ephemeral=True)
+            
+        bank_data = get_bank_data(self.user_id)
+        bank_data["plan"] = "basic"
+        update_bank_data(self.user_id, bank_data)
+        
+        await self.disable_all_items()
+        await interaction.message.edit(view=self)
+        await interaction.response.send_message(
+            f"{interaction.user.mention} You've selected the **Basic** bank plan! {BANK_PLANS['basic']['description']}"
+        )
+
+    @discord.ui.button(label="Premium", style=discord.ButtonStyle.secondary)
+    async def premium_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your bank selection!", ephemeral=True)
+            
+        bank_data = get_bank_data(self.user_id)
+        bank_data["plan"] = "premium"
+        update_bank_data(self.user_id, bank_data)
+        
+        await self.disable_all_items()
+        await interaction.message.edit(view=self)
+        await interaction.response.send_message(
+            f"{interaction.user.mention} You've selected the **Premium** bank plan! {BANK_PLANS['premium']['description']}"
+        )
+
+    @discord.ui.button(label="VIP", style=discord.ButtonStyle.success)
+    async def vip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This is not your bank selection!", ephemeral=True)
+            
+        bank_data = get_bank_data(self.user_id)
+        bank_data["plan"] = "vip"
+        update_bank_data(self.user_id, bank_data)
+        
+        await self.disable_all_items()
+        await interaction.message.edit(view=self)
+        await interaction.response.send_message(
+            f"{interaction.user.mention} You've selected the **VIP** bank plan! {BANK_PLANS['vip']['description']}"
+        )
+
+@bot.command()
+async def bank(ctx):
+    """View or change your bank plan"""
+    user_id = ctx.author.id
+    bank_data = get_bank_data(user_id)
+    
+    if bank_data["plan"] is None:
+        # No plan selected yet
+        view = BankPlanView(user_id)
+        await ctx.send(
+            f"{ctx.author.mention}, you currently have no bank plan. Select one below:",
+            view=view
+        )
+    else:
+        # Show current plan
+        current_plan = BANK_PLANS[bank_data["plan"]]
+        await ctx.send(
+            f"{ctx.author.mention}, your current bank plan is **{current_plan['name']}**.\n"
+            f"• {current_plan['description']}\n"
+            f"• Deposited: {bank_data['deposited']} coins\n\n"
+            "To change your plan, use `-bank` again."
+        )
+
+@bot.command()
+async def deposit(ctx, amount: int):
+    """Deposit coins into your bank account"""
+    user_id = ctx.author.id
+    bank_data = get_bank_data(user_id)
+    
+    if bank_data["plan"] is None:
+        return await ctx.send("You currently have no bank plan. Use `-bank` to get started.")
+    
+    current_balance = get_balance(user_id)
+    
+    if amount <= 0:
+        return await ctx.send("❌ Deposit amount must be positive.")
+    if amount > current_balance:
+        return await ctx.send("❌ You don't have enough coins to deposit that amount.")
+    
+    # Check if deposit meets minimum for plan
+    plan = BANK_PLANS[bank_data["plan"]]
+    if (bank_data["deposited"] + amount) < plan["min_deposit"]:
+        return await ctx.send(f"❌ Your total deposited amount must be at least {plan['min_deposit']} coins for this plan.")
+    
+    # Update balances
+    set_balance(user_id, current_balance - amount)
+    bank_data["deposited"] += amount
+    update_bank_data(user_id, bank_data)
+    
+    await ctx.send(
+        f"✅ Successfully deposited **{amount} coins** to your bank account.\n"
+        f"• New wallet balance: **{current_balance - amount} coins**\n"
+        f"• Bank balance: **{bank_data['deposited']} coins**"
+    )
+
+@bot.command()
+async def withdraw(ctx, amount: int):
+    """Withdraw coins from your bank account"""
+    user_id = ctx.author.id
+    bank_data = get_bank_data(user_id)
+    
+    if bank_data["plan"] is None:
+        return await ctx.send("You currently have no bank plan. Use `-bank` to get started.")
+    
+    if amount <= 0:
+        return await ctx.send("❌ Withdrawal amount must be positive.")
+    if amount > bank_data["deposited"]:
+        return await ctx.send("❌ You don't have that much deposited in your bank account.")
+    
+    # Check if withdrawal would go below minimum for plan
+    plan = BANK_PLANS[bank_data["plan"]]
+    if (bank_data["deposited"] - amount) < plan["min_deposit"]:
+        return await ctx.send(
+            f"❌ You must maintain at least {plan['min_deposit']} coins deposited for your plan.\n"
+            "Consider switching to a different plan with `-bank` or withdrawing less."
+        )
+    
+    # Update balances
+    current_balance = get_balance(user_id)
+    set_balance(user_id, current_balance + amount)
+    bank_data["deposited"] -= amount
+    update_bank_data(user_id, bank_data)
+    
+    await ctx.send(
+        f"✅ Successfully withdrew **{amount} coins** from your bank account.\n"
+        f"• New wallet balance: **{current_balance + amount} coins**\n"
+        f"• Bank balance: **{bank_data['deposited']} coins**"
+    )
 
 # ------------------ COIN FLIP BUTTONS ------------------
 
@@ -114,7 +310,12 @@ async def bal(ctx, member: discord.Member = None):
     if member is None:
         member = ctx.author
     balance = get_balance(member.id)
-    await ctx.send(f"{member.display_name} has 💰 **{balance} coins**.")
+    bank_data = get_bank_data(member.id)
+    await ctx.send(
+        f"{member.display_name}'s balances:\n"
+        f"• Wallet: 💰 **{balance} coins**\n"
+        f"• Bank: 🏦 **{bank_data['deposited']} coins** ({BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'})"
+    )
 
 # ------------------ ADMIN CHECK DECORATOR ------------------
 
