@@ -149,6 +149,48 @@ class BankPlanView(discord.ui.View):
         )
 
 @bot.command()
+async def deposit(ctx, amount: int):
+    """Deposit coins into your bank account"""
+    user_id = ctx.author.id
+    wallet_balance = get_balance(user_id)
+    bank_data = get_bank_data(user_id)
+    
+    # Check if user has a bank plan
+    if bank_data["plan"] is None:
+        return await ctx.send("❌ You don't have a bank plan. Use `-bank` to select one first.")
+    
+    # Validate the amount
+    if amount <= 0:
+        return await ctx.send("❌ Deposit amount must be positive.")
+    if amount > wallet_balance:
+        return await ctx.send("❌ You don't have that much in your wallet.")
+    
+    # Get the bank plan details
+    plan = BANK_PLANS[bank_data["plan"]]
+    
+    # Calculate new deposited amount
+    new_deposited = bank_data["deposited"] + amount
+    
+    # Check if this meets the minimum for the plan (only if they had nothing deposited before)
+    if bank_data["deposited"] == 0 and new_deposited < plan["min_deposit"]:
+        return await ctx.send(
+            f"❌ Your **{plan['name']}** plan requires a minimum deposit of {plan['min_deposit']} coins.\n"
+            f"Either deposit at least {plan['min_deposit']} coins or switch to a different plan with `-bank`."
+        )
+    
+    # Update balances
+    set_balance(user_id, wallet_balance - amount)
+    bank_data["deposited"] = new_deposited
+    update_bank_data(user_id, bank_data)
+    
+    await ctx.send(
+        f"✅ Successfully deposited **{amount} coins** into your bank account!\n"
+        f"• New wallet balance: **{wallet_balance - amount} coins**\n"
+        f"• Bank balance: **{new_deposited} coins**\n"
+        f"• Plan: **{plan['name']}** ({plan['interest']*100}% daily interest)"
+    )
+
+@bot.command()
 async def withdraw(ctx, amount: int):
     """Withdraw coins from your bank account"""
     user_id = ctx.author.id
