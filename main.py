@@ -5,6 +5,7 @@ import random
 import json
 from threading import Thread
 from flask import Flask
+import re
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
@@ -270,12 +271,16 @@ class CoinFlipView(discord.ui.View):
 
         set_balance(self.user_id, new_balance)
         self.has_responded = True
+        bank_data = get_bank_data(self.user_id)  # Get bank data
 
         await self.disable_all_items()
         await interaction.message.edit(view=self)
 
+        # Updated message format
         await interaction.response.send_message(
-            f"{interaction.user.mention} {outcome} Your new balance is **{new_balance} coins**."
+            f"{interaction.user.mention} {outcome}\n"
+            f"• Wallet: **{new_balance} coins**\n"
+            f"• Bank: **{bank_data['deposited']} coins**"
         )
 
     @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary)
@@ -311,10 +316,12 @@ async def bal(ctx, member: discord.Member = None):
         member = ctx.author
     balance = get_balance(member.id)
     bank_data = get_bank_data(member.id)
+    plan_name = BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'
+    
     await ctx.send(
-        f"{member.display_name}'s balances:\n"
+        f"**{member.display_name}'s balances:**\n"
         f"• Wallet: 💰 **{balance} coins**\n"
-        f"• Bank: 🏦 **{bank_data['deposited']} coins** ({BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'})"
+        f"• Bank: 🏦 **{bank_data['deposited']} coins** ({plan_name})"
     )
 
 # ------------------ ADMIN CHECK DECORATOR ------------------
@@ -328,7 +335,7 @@ def is_admin():
         return False
     return commands.check(predicate)
 
-# ------------------ ADMIN SETBAL COMMAND ------------------
+# ------------------ ADMIN COMMANDS ------------------
 
 @bot.command(aliases=["setbalance", "setbal"])
 @is_admin()
@@ -336,9 +343,73 @@ async def admin_setbal(ctx, member: discord.Member, amount: int):
     if amount < 0:
         return await ctx.send("❌ Balance cannot be negative.")
     set_balance(member.id, amount)
-    await ctx.send(f"✅ Set {member.display_name}'s balance to **{amount} coins**.")
+    await ctx.send(f"✅ Set {member.display_name}'s wallet balance to **{amount} coins**.")
 
-# ------------------ BLACKJACK (Stub) ------------------
+@bot.command()
+@is_admin()
+async def checkall(ctx):
+    """Export all user balances and bank data"""
+    balances = load_balances()
+    bank_data = load_bank_data()
+    
+    output = []
+    # Combine user IDs from both files
+    all_user_ids = set(balances.keys()) | set(bank_data.keys())
+    
+    for user_id in all_user_ids:
+        wallet = balances.get(user_id, 1000)  # Default to 1000 if not found
+        b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
+        plan = b_data["plan"] or "None"
+        deposited = b_data["deposited"]
+        output.append(f"{user_id}:{wallet}:{plan}:{deposited}")
+    
+    data = "\n".join(output)
+    await ctx.send(f"```{data}```")
+
+@bot.command()
+@is_admin()
+async def setall(ctx, *, data: str):
+    """Import all user balances and bank data"""
+    # Remove code block markers if present
+    if data.startswith('```') and data.endswith('```'):
+        data = data[3:-3].strip()
+    
+    lines = data.split('\n')
+    balances = {}
+    bank_data = {}
+    
+    for line in lines:
+        if not line.strip():
+            continue
+            
+        parts = line.split(':')
+        if len(parts) != 4:
+            continue
+            
+        try:
+            user_id = parts[0].strip()
+            wallet = int(parts[1].strip())
+            plan = parts[2].strip()
+            deposited = int(parts[3].strip())
+            
+            # Add to balances
+            balances[user_id] = wallet
+            
+            # Add to bank data
+            bank_data[user_id] = {
+                "plan": None if plan.lower() == "none" else plan,
+                "deposited": deposited
+            }
+        except ValueError:
+            continue
+    
+    # Save the data
+    save_balances(balances)
+    save_bank_data(bank_data)
+    
+    await ctx.send(f"✅ Successfully imported data for {len(balances)} users!")
+
+# ------------------ GAME STUBS ------------------
 
 @bot.command()
 async def bj(ctx, amount: int):
@@ -350,8 +421,6 @@ async def bj(ctx, amount: int):
         return await ctx.send("❌ You don't have enough balance.")
     # TODO: Implement blackjack logic here
     await ctx.send(f"Blackjack is not implemented yet, but you tried to bet {amount} coins!")
-
-# ------------------ MINESWEEPER (Stub) ------------------
 
 @bot.command()
 async def minesweeper(ctx, amount: int):
