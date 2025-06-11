@@ -147,6 +147,41 @@ class BankPlanView(discord.ui.View):
         await interaction.response.send_message(
             f"{interaction.user.mention} You've selected the **VIP** bank plan! {BANK_PLANS['vip']['description']}"
         )
+
+@bot.command()Add commentMore actions
+async def withdraw(ctx, amount: int):
+    """Withdraw coins from your bank account"""
+    user_id = ctx.author.id
+    bank_data = get_bank_data(user_id)
+    
+    if bank_data["plan"] is None:
+        return await ctx.send("You currently have no bank plan. Use `-bank` to get started.")
+    
+    if amount <= 0:
+        return await ctx.send("❌ Withdrawal amount must be positive.")
+    if amount > bank_data["deposited"]:
+        return await ctx.send("❌ You don't have that much deposited in your bank account.")
+    
+    # Check if withdrawal would go below minimum for plan
+    plan = BANK_PLANS[bank_data["plan"]]
+    if (bank_data["deposited"] - amount) < plan["min_deposit"]:
+        return await ctx.send(
+            f"❌ You must maintain at least {plan['min_deposit']} coins deposited for your plan.\n"
+            "Consider switching to a different plan with `-bank` or withdrawing less."
+        )
+    
+    # Update balances
+    current_balance = get_balance(user_id)
+    set_balance(user_id, current_balance + amount)
+    bank_data["deposited"] -= amount
+    update_bank_data(user_id, bank_data)
+    
+    await ctx.send(
+        f"✅ Successfully withdrew **{amount} coins** from your bank account.\n"
+        f"• New wallet balance: **{current_balance + amount} coins**\n"
+        f"• Bank balance: **{bank_data['deposited']} coins**"
+    )
+
 @bot.command()
 async def interest(ctx):
     """Claim your daily interest from the bank"""
