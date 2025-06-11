@@ -6,13 +6,39 @@ import random
 import json
 from threading import Thread
 from flask import Flask
-import re
 
-# ------------------ BALANCE MANAGEMENT ------------------
-
+# ------------------ FILE PATHS ------------------
 BALANCE_FILE = "balances.json"
 BANK_FILE = "bank_data.json"
+LOAN_FILE = "loans.json"
 
+# ------------------ CONSTANTS ------------------
+MAX_LOAN_AMOUNT = 10000
+LOAN_INTEREST_RATE = 0.1  # 10%
+LOAN_TERM_DAYS = 7  # Must repay within 7 days
+
+BANK_PLANS = {
+    "basic": {
+        "name": "Basic",
+        "min_deposit": 0,
+        "interest": 0.01,
+        "description": "1% daily interest, no minimum balance"
+    },
+    "premium": {
+        "name": "Premium",
+        "min_deposit": 5000,
+        "interest": 0.03,
+        "description": "3% daily interest, requires 5,000 coin minimum"
+    },
+    "vip": {
+        "name": "VIP",
+        "min_deposit": 15000,
+        "interest": 0.05,
+        "description": "5% daily interest, requires 15,000 coin minimum"
+    }
+}
+
+# ------------------ BALANCE MANAGEMENT ------------------
 def load_balances():
     try:
         with open(BALANCE_FILE, "r") as f:
@@ -26,7 +52,7 @@ def save_balances(balances):
 
 def get_balance(user_id):
     balances = load_balances()
-    return balances.get(str(user_id), 1000)  # Default 1000 coins if new user
+    return balances.get(str(user_id), 1000)
 
 def set_balance(user_id, amount):
     balances = load_balances()
@@ -34,7 +60,6 @@ def set_balance(user_id, amount):
     save_balances(balances)
 
 # ------------------ BANK MANAGEMENT ------------------
-
 def load_bank_data():
     try:
         with open(BANK_FILE, "r") as f:
@@ -63,37 +88,41 @@ def update_bank_data(user_id, data):
     bank_data[str(user_id)] = data
     save_bank_data(bank_data)
 
-# Bank plans with interest rates and minimum balances
-BANK_PLANS = {
-    "basic": {
-        "name": "Basic",
-        "min_deposit": 0,
-        "interest": 0.01,  # 1% daily interest
-        "description": "1% daily interest, no minimum balance"
-    },
-    "premium": {
-        "name": "Premium",
-        "min_deposit": 5000,
-        "interest": 0.03,  # 3% daily interest
-        "description": "3% daily interest, requires 5,000 coin minimum"
-    },
-    "vip": {
-        "name": "VIP",
-        "min_deposit": 15000,
-        "interest": 0.05,  # 5% daily interest
-        "description": "5% daily interest, requires 15,000 coin minimum"
-    }
-}
+# ------------------ LOAN MANAGEMENT ------------------
+def load_loans():
+    try:
+        with open(LOAN_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_loans(loans):
+    with open(LOAN_FILE, "w") as f:
+        json.dump(loans, f)
+
+def get_loan_data(user_id):
+    loans = load_loans()
+    if str(user_id) not in loans:
+        loans[str(user_id)] = {
+            "amount": 0,
+            "interest": 0,
+            "taken_at": 0,
+            "repaid": 0
+        }
+        save_loans(loans)
+    return loans[str(user_id)]
+
+def update_loan_data(user_id, data):
+    loans = load_loans()
+    loans[str(user_id)] = data
+    save_loans(loans)
 
 # ------------------ DISCORD BOT SETUP ------------------
-
 intents = discord.Intents.default()
 intents.message_content = True
-
 bot = commands.Bot(command_prefix="-", intents=intents)
 
-# ------------------ BANK COMMANDS ------------------
-
+# ------------------ BANK VIEW CLASSES ------------------
 class BankPlanView(discord.ui.View):
     def __init__(self, user_id: int):
         super().__init__(timeout=30)
@@ -115,7 +144,7 @@ class BankPlanView(discord.ui.View):
         await self.disable_all_items()
         await interaction.message.edit(view=self)
         await interaction.response.send_message(
-            f"{interaction.user.mention} You've selected the **Basic** bank plan! {BANK_PLANS['basic']['description']}"
+            f"{interaction.user.mention} You've selected the Basic bank plan! {BANK_PLANS['basic']['description']}"
         )
 
     @discord.ui.button(label="Premium", style=discord.ButtonStyle.secondary)
@@ -130,7 +159,7 @@ class BankPlanView(discord.ui.View):
         await self.disable_all_items()
         await interaction.message.edit(view=self)
         await interaction.response.send_message(
-            f"{interaction.user.mention} You've selected the **Premium** bank plan! {BANK_PLANS['premium']['description']}"
+            f"{interaction.user.mention} You've selected the Premium bank plan! {BANK_PLANS['premium']['description']}"
         )
 
     @discord.ui.button(label="VIP", style=discord.ButtonStyle.success)
@@ -145,9 +174,10 @@ class BankPlanView(discord.ui.View):
         await self.disable_all_items()
         await interaction.message.edit(view=self)
         await interaction.response.send_message(
-            f"{interaction.user.mention} You've selected the **VIP** bank plan! {BANK_PLANS['vip']['description']}"
+            f"{interaction.user.mention} You've selected the VIP bank plan! {BANK_PLANS['vip']['description']}"
         )
 
+# ------------------ BANK COMMANDS ------------------
 @bot.command()
 async def deposit(ctx, amount: int):
     """Deposit coins into your bank account"""
@@ -155,39 +185,32 @@ async def deposit(ctx, amount: int):
     wallet_balance = get_balance(user_id)
     bank_data = get_bank_data(user_id)
     
-    # Check if user has a bank plan
     if bank_data["plan"] is None:
         return await ctx.send("❌ You don't have a bank plan. Use `-bank` to select one first.")
     
-    # Validate the amount
     if amount <= 0:
         return await ctx.send("❌ Deposit amount must be positive.")
     if amount > wallet_balance:
         return await ctx.send("❌ You don't have that much in your wallet.")
     
-    # Get the bank plan details
     plan = BANK_PLANS[bank_data["plan"]]
-    
-    # Calculate new deposited amount
     new_deposited = bank_data["deposited"] + amount
     
-    # Check if this meets the minimum for the plan (only if they had nothing deposited before)
     if bank_data["deposited"] == 0 and new_deposited < plan["min_deposit"]:
         return await ctx.send(
-            f"❌ Your **{plan['name']}** plan requires a minimum deposit of {plan['min_deposit']} coins.\n"
+            f"❌ Your {plan['name']} plan requires a minimum deposit of {plan['min_deposit']} coins.\n"
             f"Either deposit at least {plan['min_deposit']} coins or switch to a different plan with `-bank`."
         )
     
-    # Update balances
     set_balance(user_id, wallet_balance - amount)
     bank_data["deposited"] = new_deposited
     update_bank_data(user_id, bank_data)
     
     await ctx.send(
-        f"✅ Successfully deposited **{amount} coins** into your bank account!\n"
-        f"• New wallet balance: **{wallet_balance - amount} coins**\n"
-        f"• Bank balance: **{new_deposited} coins**\n"
-        f"• Plan: **{plan['name']}** ({plan['interest']*100}% daily interest)"
+        f"✅ Successfully deposited {amount} coins into your bank account!\n"
+        f"• New wallet balance: {wallet_balance - amount} coins\n"
+        f"• Bank balance: {new_deposited} coins\n"
+        f"• Plan: {plan['name']} ({plan['interest']*100}% daily interest)"
     )
 
 @bot.command()
@@ -204,7 +227,6 @@ async def withdraw(ctx, amount: int):
     if amount > bank_data["deposited"]:
         return await ctx.send("❌ You don't have that much deposited in your bank account.")
     
-    # Check if withdrawal would go below minimum for plan
     plan = BANK_PLANS[bank_data["plan"]]
     if (bank_data["deposited"] - amount) < plan["min_deposit"]:
         return await ctx.send(
@@ -212,16 +234,15 @@ async def withdraw(ctx, amount: int):
             "Consider switching to a different plan with `-bank` or withdrawing less."
         )
     
-    # Update balances
     current_balance = get_balance(user_id)
     set_balance(user_id, current_balance + amount)
     bank_data["deposited"] -= amount
     update_bank_data(user_id, bank_data)
     
     await ctx.send(
-        f"✅ Successfully withdrew **{amount} coins** from your bank account.\n"
-        f"• New wallet balance: **{current_balance + amount} coins**\n"
-        f"• Bank balance: **{bank_data['deposited']} coins**"
+        f"✅ Successfully withdrew {amount} coins from your bank account.\n"
+        f"• New wallet balance: {current_balance + amount} coins\n"
+        f"• Bank balance: {bank_data['deposited']} coins"
     )
 
 @bot.command()
@@ -238,11 +259,8 @@ async def interest(ctx):
     
     current_time = time.time()
     last_claim = bank_data["last_interest_claim"]
+    days_passed = max(1, int((current_time - last_claim) / 86400))
     
-    # Calculate how many days have passed (minimum 1)
-    days_passed = max(1, int((current_time - last_claim) / 86400))  # 86400 seconds = 1 day
-    
-    # Calculate interest for each day (compounding)
     interest_rate = BANK_PLANS[bank_data["plan"]]["interest"]
     principal = bank_data["deposited"]
     total_interest = 0
@@ -252,17 +270,15 @@ async def interest(ctx):
         total_interest += daily_interest
         principal += daily_interest
     
-    # Add to pending interest
     bank_data["pending_interest"] += total_interest
     bank_data["last_interest_claim"] = current_time
     update_bank_data(user_id, bank_data)
     
     await ctx.send(
-        f"⏳ You've accumulated **{int(total_interest)} coins** in interest over {days_passed} day(s).\n"
+        f"⏳ You've accumulated {int(total_interest)} coins in interest over {days_passed} day(s).\n"
         f"Use `-claim` to add it to your bank balance!"
     )
 
-# Add this new command to claim the interest
 @bot.command()
 async def claim(ctx):
     """Claim your accumulated interest"""
@@ -278,8 +294,8 @@ async def claim(ctx):
     update_bank_data(user_id, bank_data)
     
     await ctx.send(
-        f"💰 Successfully claimed **{int(interest_to_add)} coins** in interest!\n"
-        f"Your new bank balance is **{bank_data['deposited']} coins**."
+        f"💰 Successfully claimed {int(interest_to_add)} coins in interest!\n"
+        f"Your new bank balance is {bank_data['deposited']} coins."
     )
 
 @bot.command()
@@ -297,7 +313,7 @@ async def bank(ctx):
     else:
         current_plan = BANK_PLANS[bank_data["plan"]]
         message = (
-            f"{ctx.author.mention}, your current bank plan is **{current_plan['name']}**.\n"
+            f"{ctx.author.mention}, your current bank plan is {current_plan['name']}.\n"
             f"• {current_plan['description']}\n"
             f"• Deposited: {bank_data['deposited']} coins\n"
         )
@@ -305,7 +321,6 @@ async def bank(ctx):
         if bank_data["pending_interest"] > 0:
             message += f"• Pending interest: 🎁 {int(bank_data['pending_interest'])} coins (use `-claim`)\n"
         
-        # Calculate time until next interest
         if bank_data["last_interest_claim"] > 0:
             next_interest = bank_data["last_interest_claim"] + 86400 - time.time()
             if next_interest > 0:
@@ -318,98 +333,121 @@ async def bank(ctx):
         message += "\nTo change your plan, use `-bank` again."
         await ctx.send(message)
 
-# ------------------ COIN FLIP BUTTONS ------------------
-
-class CoinFlipView(discord.ui.View):
-    def __init__(self, user_id: int, bet_amount: int):
-        super().__init__(timeout=30)
-        self.user_id = user_id
-        self.bet_amount = bet_amount
-        self.has_responded = False
-
-    async def disable_all_items(self):
-        for item in self.children:
-            item.disabled = True
-
-    async def update_balance_and_send_result(self, interaction: discord.Interaction, user_choice: str):
-        if self.has_responded:
-            await interaction.response.send_message("You already flipped!", ephemeral=True)
-            return
-
-        current_balance = get_balance(self.user_id)
-
-        if self.bet_amount > current_balance:
-            await interaction.response.send_message("You don't have enough balance for this bet!", ephemeral=True)
-            await self.disable_all_items()
-            await interaction.message.edit(view=self)
-            return
-
-        result = random.choice(["heads", "tails"])
-
-        if result == user_choice:
-            new_balance = current_balance + self.bet_amount
-            outcome = f"🎉 It was **{result.capitalize()}**! You **won** {self.bet_amount} coins!"
-        else:
-            new_balance = current_balance - self.bet_amount
-            outcome = f"😢 It was **{result.capitalize()}**. You **lost** {self.bet_amount} coins."
-
-        set_balance(self.user_id, new_balance)
-        self.has_responded = True
-        bank_data = get_bank_data(self.user_id)  # Get bank data
-
-        await self.disable_all_items()
-        await interaction.message.edit(view=self)
-
-        # Updated message format
-        await interaction.response.send_message(
-            f"{interaction.user.mention} {outcome}\n"
-            f"• Wallet: **{new_balance} coins**\n"
-            f"• Bank: **{bank_data['deposited']} coins**"
-        )
-
-    @discord.ui.button(label="Heads", style=discord.ButtonStyle.primary)
-    async def heads_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
-        await self.update_balance_and_send_result(interaction, "heads")
-
-    @discord.ui.button(label="Tails", style=discord.ButtonStyle.secondary)
-    async def tails_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This is not your coin flip!", ephemeral=True)
-        await self.update_balance_and_send_result(interaction, "tails")
-
+# ------------------ LOAN COMMANDS ------------------
 @bot.command()
-async def cf(ctx, amount: int):
+async def loan(ctx, amount: int):
+    """Take out a loan from the bank"""
     user_id = ctx.author.id
+    loan_data = get_loan_data(user_id)
     current_balance = get_balance(user_id)
-
+    
+    if loan_data["amount"] > 0 and loan_data["repaid"] < loan_data["amount"] + loan_data["interest"]:
+        owed = (loan_data["amount"] + loan_data["interest"]) - loan_data["repaid"]
+        return await ctx.send(
+            f"❌ You already have an outstanding loan of {owed} coins!\n"
+            f"Use `-repay` to pay it back first."
+        )
+    
     if amount <= 0:
-        return await ctx.send("❌ Bet must be more than 0.")
-    if current_balance < amount:
-        return await ctx.send("❌ You don't have enough balance.")
-
-    view = CoinFlipView(user_id, amount)
-    await ctx.send(f"{ctx.author.mention}, choose Heads or Tails to flip the coin and bet **{amount}** coins!", view=view)
-
-# ------------------ BALANCE CHECK COMMANDS ------------------
-
-@bot.command(aliases=["balance"])
-async def bal(ctx, member: discord.Member = None):
-    if member is None:
-        member = ctx.author
-    balance = get_balance(member.id)
-    bank_data = get_bank_data(member.id)
-    plan_name = BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'
+        return await ctx.send("❌ Loan amount must be positive.")
+    if amount > MAX_LOAN_AMOUNT:
+        return await ctx.send(f"❌ Maximum loan amount is {MAX_LOAN_AMOUNT} coins.")
+    
+    interest = int(amount * LOAN_INTEREST_RATE)
+    total_to_repay = amount + interest
+    
+    loan_data["amount"] = amount
+    loan_data["interest"] = interest
+    loan_data["taken_at"] = time.time()
+    loan_data["repaid"] = 0
+    update_loan_data(user_id, loan_data)
+    
+    set_balance(user_id, current_balance + amount)
     
     await ctx.send(
-        f"**{member.display_name}'s balances:**\n"
-        f"• Wallet: 💰 **{balance} coins**\n"
-        f"• Bank: 🏦 **{bank_data['deposited']} coins** ({plan_name})"
+        f"✅ You've taken out a loan of {amount} coins!\n"
+        f"• Interest: {interest} coins (10%)\n"
+        f"• Total to repay: {total_to_repay} coins\n"
+        f"• Due within: {LOAN_TERM_DAYS} days\n\n"
+        f"Use `-repay <amount>` to pay back your loan."
     )
 
-# ------------------ ADMIN CHECK DECORATOR ------------------
+@bot.command()
+async def repay(ctx, amount: int):
+    """Repay your loan"""
+    user_id = ctx.author.id
+    loan_data = get_loan_data(user_id)
+    current_balance = get_balance(user_id)
+    
+    if loan_data["amount"] == 0 or loan_data["repaid"] >= loan_data["amount"] + loan_data["interest"]:
+        return await ctx.send("❌ You don't have any active loans.")
+    
+    if amount <= 0:
+        return await ctx.send("❌ Repayment amount must be positive.")
+    if amount > current_balance:
+        return await ctx.send("❌ You don't have enough coins to make this payment.")
+    
+    total_owed = (loan_data["amount"] + loan_data["interest"]) - loan_data["repaid"]
+    
+    if amount > total_owed:
+        return await ctx.send(f"❌ You only owe {total_owed} coins.")
+    
+    set_balance(user_id, current_balance - amount)
+    loan_data["repaid"] += amount
+    update_loan_data(user_id, loan_data)
+    
+    remaining = (loan_data["amount"] + loan_data["interest"]) - loan_data["repaid"]
+    
+    if remaining <= 0:
+        message = "🎉 Congratulations! You've fully repaid your loan!"
+        loan_data["amount"] = 0
+        loan_data["interest"] = 0
+        loan_data["taken_at"] = 0
+        loan_data["repaid"] = 0
+        update_loan_data(user_id, loan_data)
+    else:
+        message = f"Remaining balance: {remaining} coins"
+    
+    await ctx.send(
+        f"✅ Successfully repaid {amount} coins!\n"
+        f"{message}"
+    )
 
+@bot.command(aliases=["loaninfo"])
+async def myloan(ctx):
+    """Check your current loan status"""
+    user_id = ctx.author.id
+    loan_data = get_loan_data(user_id)
+    
+    if loan_data["amount"] == 0 or loan_data["repaid"] >= loan_data["amount"] + loan_data["interest"]:
+        return await ctx.send("You don't have any active loans.")
+    
+    total_owed = loan_data["amount"] + loan_data["interest"]
+    repaid = loan_data["repaid"]
+    remaining = total_owed - repaid
+    
+    taken_at = loan_data["taken_at"]
+    due_date = taken_at + (LOAN_TERM_DAYS * 86400)
+    time_left = due_date - time.time()
+    
+    if time_left <= 0:
+        time_msg = "⚠️ PAST DUE!"
+    else:
+        hours = int(time_left // 3600)
+        minutes = int((time_left % 3600) // 60)
+        time_msg = f"Due in: {hours}h {minutes}m"
+    
+    await ctx.send(
+        f"**{ctx.author.display_name}'s Loan Status**\n"
+        f"• Original amount: {loan_data['amount']} coins\n"
+        f"• Interest: {loan_data['interest']} coins (10%)\n"
+        f"• Total repaid: {repaid} coins\n"
+        f"• Remaining: {remaining} coins\n"
+        f"• {time_msg}\n\n"
+        f"Use `-repay <amount>` to make a payment."
+    )
+
+# ------------------ ADMIN COMMANDS ------------------
 def is_admin():
     async def predicate(ctx):
         admin_role = discord.utils.get(ctx.guild.roles, name="carrot")
@@ -419,15 +457,13 @@ def is_admin():
         return False
     return commands.check(predicate)
 
-# ------------------ ADMIN COMMANDS ------------------
-
 @bot.command(aliases=["setbalance", "setbal"])
 @is_admin()
 async def admin_setbal(ctx, member: discord.Member, amount: int):
     if amount < 0:
         return await ctx.send("❌ Balance cannot be negative.")
     set_balance(member.id, amount)
-    await ctx.send(f"✅ Set {member.display_name}'s wallet balance to **{amount} coins**.")
+    await ctx.send(f"✅ Set {member.display_name}'s wallet balance to {amount} coins.")
 
 @bot.command()
 @is_admin()
@@ -435,45 +471,42 @@ async def checkall(ctx):
     """Export all user balances and bank data"""
     balances = load_balances()
     bank_data = load_bank_data()
+    loans = load_loans()
     
     output = []
-    # Combine user IDs from both files
-    all_user_ids = set(balances.keys()) | set(bank_data.keys())
+    all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys())
     
     for user_id in all_user_ids:
-        wallet = balances.get(user_id, 1000)  # Default to 1000 if not found
+        wallet = balances.get(user_id, 1000)
         b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
         plan = b_data["plan"] or "None"
         deposited = b_data["deposited"]
-        # Use pipe (|) as delimiter instead of colon
-        output.append(f"{user_id}|{wallet}|{plan}|{deposited}")
+        l_data = loans.get(user_id, {"amount": 0, "repaid": 0})
+        output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{l_data['amount']}|{l_data['repaid']}")
     
     data = "\n".join(output)
-    # Use a code block with specific language to prevent formatting issues
     await ctx.send(f"```data\n{data}```")
 
 @bot.command()
 @is_admin()
 async def setall(ctx, *, data: str):
     """Import all user balances and bank data"""
-    # Remove code block markers if present
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
-        # Remove optional language specifier
         if data.startswith('data\n'):
             data = data[5:]
     
     lines = data.split('\n')
     balances = {}
     bank_data = {}
+    loans = {}
     
     for line in lines:
         if not line.strip():
             continue
             
-        # Split using pipe delimiter
         parts = line.split('|')
-        if len(parts) != 4:
+        if len(parts) != 6:
             continue
             
         try:
@@ -481,50 +514,30 @@ async def setall(ctx, *, data: str):
             wallet = int(parts[1].strip())
             plan = parts[2].strip()
             deposited = int(parts[3].strip())
+            loan_amount = int(parts[4].strip())
+            loan_repaid = int(parts[5].strip())
             
-            # Add to balances
             balances[user_id] = wallet
             
-            # Add to bank data
             bank_data[user_id] = {
                 "plan": None if plan.lower() == "none" else plan,
                 "deposited": deposited
             }
+            
+            loans[user_id] = {
+                "amount": loan_amount,
+                "repaid": loan_repaid
+            }
         except ValueError:
             continue
     
-    # Save the data
     save_balances(balances)
     save_bank_data(bank_data)
+    save_loans(loans)
     
     await ctx.send(f"✅ Successfully imported data for {len(balances)} users!")
 
-# ------------------ GAME STUBS ------------------
-
-@bot.command()
-async def bj(ctx, amount: int):
-    user_id = ctx.author.id
-    current_balance = get_balance(user_id)
-    if amount <= 0:
-        return await ctx.send("❌ Bet must be more than 0.")
-    if current_balance < amount:
-        return await ctx.send("❌ You don't have enough balance.")
-    # TODO: Implement blackjack logic here
-    await ctx.send(f"Blackjack is not implemented yet, but you tried to bet {amount} coins!")
-
-@bot.command()
-async def minesweeper(ctx, amount: int):
-    user_id = ctx.author.id
-    current_balance = get_balance(user_id)
-    if amount <= 0:
-        return await ctx.send("❌ Bet must be more than 0.")
-    if current_balance < amount:
-        return await ctx.send("❌ You don't have enough balance.")
-    # TODO: Implement minesweeper logic here
-    await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
-
 # ------------------ KEEP ALIVE (FLASK) ------------------
-
 app = Flask("")
 
 @app.route("/")
@@ -539,6 +552,5 @@ def keep_alive():
     t.start()
 
 # ------------------ RUN BOT ------------------
-
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
