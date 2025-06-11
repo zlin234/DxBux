@@ -148,7 +148,7 @@ class BankPlanView(discord.ui.View):
             f"{interaction.user.mention} You've selected the **VIP** bank plan! {BANK_PLANS['vip']['description']}"
         )
 
-@bot.command()Add commentMore actions
+@bot.command()
 async def withdraw(ctx, amount: int):
     """Withdraw coins from your bank account"""
     user_id = ctx.author.id
@@ -480,23 +480,6 @@ async def minesweeper(ctx, amount: int):
         return await ctx.send("❌ You don't have enough balance.")
     # TODO: Implement minesweeper logic here
     await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
-
-# ------------------ KEEP ALIVE (FLASK) ------------------
-
-app = Flask("")
-
-@app.route("/")
-def home():
-    return "I'm alive!"
-
-def run():
-    app.run(host="0.0.0.0", port=8080)
-
-def keep_alive():
-    t = Thread(target=run)
-    t.start()
-
-# ------------------ RUN BOT ------------------
-
+    
 keep_alive()
 bot.run(os.getenv("DISCORD_TOKEN"))
