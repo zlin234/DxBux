@@ -480,14 +480,14 @@ async def minesweeper(ctx, amount: int):
         return await ctx.send("❌ You don't have enough balance.")
     # TODO: Implement minesweeper logic here
     await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
-    
+
 # ------------------ KEEP ALIVE (FLASK) ------------------
 
 app = Flask("")
 
 @app.route("/")
 def home():
-    return "New update!"
+    return "I'm alive!"
 
 def run():
     app.run(host="0.0.0.0", port=8080)
