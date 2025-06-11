@@ -1,4 +1,5 @@
 import os
+import time
 import discord
 from discord.ext import commands
 import random
@@ -44,13 +45,15 @@ def load_bank_data():
 def save_bank_data(bank_data):
     with open(BANK_FILE, "w") as f:
         json.dump(bank_data, f)
-
+        
 def get_bank_data(user_id):
     bank_data = load_bank_data()
     if str(user_id) not in bank_data:
         bank_data[str(user_id)] = {
             "plan": None,
-            "deposited": 0
+            "deposited": 0,
+            "last_interest_claim": 0,
+            "pending_interest": 0
         }
         save_bank_data(bank_data)
     return bank_data[str(user_id)]
@@ -65,20 +68,20 @@ BANK_PLANS = {
     "basic": {
         "name": "Basic",
         "min_deposit": 0,
-        "interest": 0.01,  # 1% interest
-        "description": "1% interest, no minimum balance"
+        "interest": 0.01,  # 1% daily interest
+        "description": "1% daily interest, no minimum balance"
     },
     "premium": {
         "name": "Premium",
         "min_deposit": 5000,
-        "interest": 0.03,  # 3% interest
-        "description": "3% interest, requires 5,000 coin minimum"
+        "interest": 0.03,  # 3% daily interest
+        "description": "3% daily interest, requires 5,000 coin minimum"
     },
     "vip": {
         "name": "VIP",
         "min_deposit": 15000,
-        "interest": 0.05,  # 5% interest
-        "description": "5% interest, requires 15,000 coin minimum"
+        "interest": 0.05,  # 5% daily interest
+        "description": "5% daily interest, requires 15,000 coin minimum"
     }
 }
 
@@ -144,6 +147,63 @@ class BankPlanView(discord.ui.View):
         await interaction.response.send_message(
             f"{interaction.user.mention} You've selected the **VIP** bank plan! {BANK_PLANS['vip']['description']}"
         )
+@bot.command()
+async def interest(ctx):
+    """Claim your daily interest from the bank"""
+    user_id = ctx.author.id
+    bank_data = get_bank_data(user_id)
+    
+    if bank_data["plan"] is None:
+        return await ctx.send("❌ You don't have a bank plan. Use `-bank` to get started.")
+    
+    if bank_data["deposited"] == 0:
+        return await ctx.send("❌ You don't have any coins deposited to earn interest.")
+    
+    current_time = time.time()
+    last_claim = bank_data["last_interest_claim"]
+    
+    # Calculate how many days have passed (minimum 1)
+    days_passed = max(1, int((current_time - last_claim) / 86400))  # 86400 seconds = 1 day
+    
+    # Calculate interest for each day (compounding)
+    interest_rate = BANK_PLANS[bank_data["plan"]]["interest"]
+    principal = bank_data["deposited"]
+    total_interest = 0
+    
+    for _ in range(days_passed):
+        daily_interest = principal * interest_rate
+        total_interest += daily_interest
+        principal += daily_interest
+    
+    # Add to pending interest
+    bank_data["pending_interest"] += total_interest
+    bank_data["last_interest_claim"] = current_time
+    update_bank_data(user_id, bank_data)
+    
+    await ctx.send(
+        f"⏳ You've accumulated **{int(total_interest)} coins** in interest over {days_passed} day(s).\n"
+        f"Use `-claim` to add it to your bank balance!"
+    )
+
+# Add this new command to claim the interest
+@bot.command()
+async def claim(ctx):
+    """Claim your accumulated interest"""
+    user_id = ctx.author.id
+    bank_data = get_bank_data(user_id)
+    
+    if bank_data["pending_interest"] <= 0:
+        return await ctx.send("❌ You don't have any pending interest to claim.")
+    
+    interest_to_add = bank_data["pending_interest"]
+    bank_data["deposited"] += interest_to_add
+    bank_data["pending_interest"] = 0
+    update_bank_data(user_id, bank_data)
+    
+    await ctx.send(
+        f"💰 Successfully claimed **{int(interest_to_add)} coins** in interest!\n"
+        f"Your new bank balance is **{bank_data['deposited']} coins**."
+    )
 
 @bot.command()
 async def bank(ctx):
@@ -152,87 +212,34 @@ async def bank(ctx):
     bank_data = get_bank_data(user_id)
     
     if bank_data["plan"] is None:
-        # No plan selected yet
         view = BankPlanView(user_id)
         await ctx.send(
             f"{ctx.author.mention}, you currently have no bank plan. Select one below:",
             view=view
         )
     else:
-        # Show current plan
         current_plan = BANK_PLANS[bank_data["plan"]]
-        await ctx.send(
+        message = (
             f"{ctx.author.mention}, your current bank plan is **{current_plan['name']}**.\n"
             f"• {current_plan['description']}\n"
-            f"• Deposited: {bank_data['deposited']} coins\n\n"
-            "To change your plan, use `-bank` again."
+            f"• Deposited: {bank_data['deposited']} coins\n"
         )
-
-@bot.command()
-async def deposit(ctx, amount: int):
-    """Deposit coins into your bank account"""
-    user_id = ctx.author.id
-    bank_data = get_bank_data(user_id)
-    
-    if bank_data["plan"] is None:
-        return await ctx.send("You currently have no bank plan. Use `-bank` to get started.")
-    
-    current_balance = get_balance(user_id)
-    
-    if amount <= 0:
-        return await ctx.send("❌ Deposit amount must be positive.")
-    if amount > current_balance:
-        return await ctx.send("❌ You don't have enough coins to deposit that amount.")
-    
-    # Check if deposit meets minimum for plan
-    plan = BANK_PLANS[bank_data["plan"]]
-    if (bank_data["deposited"] + amount) < plan["min_deposit"]:
-        return await ctx.send(f"❌ Your total deposited amount must be at least {plan['min_deposit']} coins for this plan.")
-    
-    # Update balances
-    set_balance(user_id, current_balance - amount)
-    bank_data["deposited"] += amount
-    update_bank_data(user_id, bank_data)
-    
-    await ctx.send(
-        f"✅ Successfully deposited **{amount} coins** to your bank account.\n"
-        f"• New wallet balance: **{current_balance - amount} coins**\n"
-        f"• Bank balance: **{bank_data['deposited']} coins**"
-    )
-
-@bot.command()
-async def withdraw(ctx, amount: int):
-    """Withdraw coins from your bank account"""
-    user_id = ctx.author.id
-    bank_data = get_bank_data(user_id)
-    
-    if bank_data["plan"] is None:
-        return await ctx.send("You currently have no bank plan. Use `-bank` to get started.")
-    
-    if amount <= 0:
-        return await ctx.send("❌ Withdrawal amount must be positive.")
-    if amount > bank_data["deposited"]:
-        return await ctx.send("❌ You don't have that much deposited in your bank account.")
-    
-    # Check if withdrawal would go below minimum for plan
-    plan = BANK_PLANS[bank_data["plan"]]
-    if (bank_data["deposited"] - amount) < plan["min_deposit"]:
-        return await ctx.send(
-            f"❌ You must maintain at least {plan['min_deposit']} coins deposited for your plan.\n"
-            "Consider switching to a different plan with `-bank` or withdrawing less."
-        )
-    
-    # Update balances
-    current_balance = get_balance(user_id)
-    set_balance(user_id, current_balance + amount)
-    bank_data["deposited"] -= amount
-    update_bank_data(user_id, bank_data)
-    
-    await ctx.send(
-        f"✅ Successfully withdrew **{amount} coins** from your bank account.\n"
-        f"• New wallet balance: **{current_balance + amount} coins**\n"
-        f"• Bank balance: **{bank_data['deposited']} coins**"
-    )
+        
+        if bank_data["pending_interest"] > 0:
+            message += f"• Pending interest: 🎁 {int(bank_data['pending_interest'])} coins (use `-claim`)\n"
+        
+        # Calculate time until next interest
+        if bank_data["last_interest_claim"] > 0:
+            next_interest = bank_data["last_interest_claim"] + 86400 - time.time()
+            if next_interest > 0:
+                hours = int(next_interest // 3600)
+                minutes = int((next_interest % 3600) // 60)
+                message += f"• Next interest in: ⏳ {hours}h {minutes}m\n"
+            else:
+                message += "• Interest available now! (use `-interest`)\n"
+        
+        message += "\nTo change your plan, use `-bank` again."
+        await ctx.send(message)
 
 # ------------------ COIN FLIP BUTTONS ------------------
 
