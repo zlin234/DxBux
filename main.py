@@ -18,14 +18,13 @@ BANK_FILE = "bank_data.json"
 LOANS_FILE = "loans.json"
 ALLOWANCE_FILE = "allowance.json"
 WHEEL_SECTIONS = [
-    {"name": "100x", "multiplier": 100, "color": 0xFF0000, "weight": 1},
-    {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 4},
-    {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 15},
-    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 10},
-    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 25},
-    {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 20},
-    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 15},
-    {"name": "Lose", "multiplier": 0, "color": 0x000000, "weight": 0.00000000000000001}
+    {"name": "100x", "multiplier": 100, "color": 0xFF0000, "weight": 2},  # ~2.5%
+    {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 8},    # ~10%
+    {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 10},     # ~12.5%
+    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 15},     # ~18.75%
+    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 20}, # ~25%
+    {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 15},   # ~18.75%
+    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 8},  # ~10%
 ]
 
 def load_balances():
@@ -741,6 +740,7 @@ async def spin_button(self, interaction: discord.Interaction, button: discord.ui
     # Get weighted selection
     total_weight = sum(section["weight"] for section in WHEEL_SECTIONS)
     selected = random.choices(WHEEL_SECTIONS, weights=[s["weight"] for s in WHEEL_SECTIONS], k=1)[0]
+    print("Weights:", [s["weight"] for s in WHEEL_SECTIONS])
 
     # Create spinning animation
     message = await interaction.followup.send("Spinning the wheel... 🎡")
