@@ -26,6 +26,8 @@ WHEEL_SECTIONS = [
     {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 30},   # ~18.75%
     {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 15},  # ~10%
 ]
+PLINKO_MULTIPLIERS = [0.5, 1.0, 2.0, 5.0, 2.0, 1.0, 0.5]  # 7 slots
+PLINKO_ROWS = 6  # Number of levels the ball falls through
 
 def load_balances():
     try:
@@ -850,6 +852,53 @@ async def wheelstats(ctx, member: discord.Member = None):
     embed.add_field(name="Biggest Win", value=f"{stats['biggest_win']} coins", inline=True)
     
     await ctx.send(embed=embed)
+
+# ------------------ PLINKO ------------------
+
+def simulate_plinko(rows: int) -> int:
+    """Returns final slot index based on random left/right bounces."""
+    position = len(PLINKO_MULTIPLIERS) // 2  # Start in the center
+    for _ in range(rows):
+        move = random.choice([-1, 1])  # Left or Right
+        position += move
+        position = max(0, min(position, len(PLINKO_MULTIPLIERS) - 1))  # Clamp to board edges
+    return position
+
+@bot.command()
+async def plinko(ctx, amount: int):
+    """Play Plinko for a chance to win based on luck."""
+    user_id = ctx.author.id
+    balance = get_balance(user_id)
+
+    if amount <= 0:
+        return await ctx.send("❌ Bet must be more than 0.")
+    if balance < amount:
+        return await ctx.send("❌ You don't have enough coins.")
+
+    # Run the Plinko simulation
+    final_slot = simulate_plinko(PLINKO_ROWS)
+    multiplier = PLINKO_MULTIPLIERS[final_slot]
+    winnings = int(amount * multiplier)
+
+    # Update balance
+    set_balance(user_id, balance - amount + winnings)
+
+    # Show result
+    visual_board = ["⬜"] * len(PLINKO_MULTIPLIERS)
+    visual_board[final_slot] = "🔴"
+    result_display = "".join(visual_board)
+
+    embed = discord.Embed(
+        title="Plinko!",
+        description=f"You dropped the ball through {PLINKO_ROWS} rows...\n\n{result_display}",
+        color=0xFFA500
+    )
+    embed.add_field(name="Slot Multiplier", value=f"{multiplier}x", inline=True)
+    embed.add_field(name="Winnings", value=f"{winnings} coins", inline=True)
+    embed.set_footer(text=f"Bet: {amount} coins")
+
+    await ctx.send(embed=embed)
+
 
 # ------------------ COIN FLIP BUTTONS ------------------
 
