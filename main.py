@@ -353,7 +353,7 @@ async def rob(ctx, member: discord.Member):
         return await ctx.send("❌ You need at least 25 coins to attempt a robbery.")
 
     # Robbery chance
-    success = random.random() < 0.5  # 50% success chance
+    success = random.random() < 0.2  # 50% success chance
 
     if success:
         stolen = random.randint(10, min(100, victim_balance // 2))
