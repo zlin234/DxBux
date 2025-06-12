@@ -1057,16 +1057,6 @@ async def setall(ctx, *, data: str):
 # ------------------ GAME STUBS ------------------
 
 @bot.command()
-async def bj(ctx, amount: int):
-    user_id = ctx.author.id
-    current_balance = get_balance(user_id)
-    if amount <= 0:
-        return await ctx.send("❌ Bet must be more than 0.")
-    if current_balance < amount:
-        return await ctx.send("❌ You don't have enough balance.")
-    await ctx.send(f"Blackjack is not implemented yet, but you tried to bet {amount} coins!")
-
-@bot.command()
 async def minesweeper(ctx, amount: int):
     user_id = ctx.author.id
     current_balance = get_balance(user_id)
