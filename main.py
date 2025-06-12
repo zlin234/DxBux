@@ -331,6 +331,104 @@ async def allowance(ctx):
             )
         else:
             await ctx.send("Something went wrong. Try again!")
+# RANDOM COMMANDS
+
+@bot.command()
+async def rob(ctx, member: discord.Member):
+    """Attempt to rob another user with a chance of failure."""
+    robber_id = ctx.author.id
+    victim_id = member.id
+
+    if member.bot:
+        return await ctx.send("❌ You can't rob bots.")
+    if robber_id == victim_id:
+        return await ctx.send("❌ You can't rob yourself.")
+
+    robber_balance = get_balance(robber_id)
+    victim_balance = get_balance(victim_id)
+
+    if victim_balance < 50:
+        return await ctx.send("❌ That user doesn’t have enough coins to rob.")
+    if robber_balance < 25:
+        return await ctx.send("❌ You need at least 25 coins to attempt a robbery.")
+
+    # Robbery chance
+    success = random.random() < 0.5  # 50% success chance
+
+    if success:
+        stolen = random.randint(10, min(100, victim_balance // 2))
+        set_balance(robber_id, robber_balance + stolen)
+        set_balance(victim_id, victim_balance - stolen)
+        await ctx.send(f"💰 {ctx.author.mention} successfully robbed {stolen} coins from {member.mention}!")
+    else:
+        penalty = random.randint(10, 30)
+        penalty = min(penalty, robber_balance)  # Don't go negative
+        set_balance(robber_id, robber_balance - penalty)
+        await ctx.send(f"🚨 {ctx.author.mention} got caught trying to rob {member.mention} and lost {penalty} coins!")
+
+@bot.command()
+async def tax(ctx, member: discord.Member):
+    """Rich players can tax others at a cost."""
+    taxer_id = ctx.author.id
+    victim_id = member.id
+
+    if member.bot:
+        return await ctx.send("❌ You can't tax bots.")
+    if taxer_id == victim_id:
+        return await ctx.send("❌ You can't tax yourself.")
+
+    taxer_balance = get_balance(taxer_id)
+    victim_balance = get_balance(victim_id)
+
+    required_balance = 10000  # Minimum to tax
+
+    if taxer_balance < required_balance:
+        return await ctx.send("❌ You need at least 10,000 coins to tax others.")
+
+    if victim_balance <= 0:
+        return await ctx.send("❌ That user has no coins to tax.")
+
+    # Victim loses 25% of their balance
+    taxed_amount = int(victim_balance * 0.10)
+    penalty_cost = int(taxed_amount * 2)  # Taxer's penalty
+
+    # Ensure taxer doesn't go negative
+    penalty_cost = min(penalty_cost, taxer_balance)
+
+    # Update balances
+    set_balance(victim_id, victim_balance - taxed_amount)
+    set_balance(taxer_id, taxer_balance - penalty_cost)
+
+    await ctx.send(
+        f"💼 {ctx.author.mention} taxed {member.mention} for **{taxed_amount} coins**!\n"
+        f"🧾 {ctx.author.mention} paid a tax fee of **{penalty_cost} coins**."
+    )
+
+
+@bot.command()
+async def donate(ctx, member: discord.Member, amount: int):
+    """Donate coins to another user."""
+    sender_id = ctx.author.id
+    recipient_id = member.id
+
+    if member.bot:
+        return await ctx.send("❌ You can't donate to bots.")
+    if sender_id == recipient_id:
+        return await ctx.send("❌ You can't donate to yourself.")
+    if amount <= 0:
+        return await ctx.send("❌ Donation amount must be greater than 0.")
+
+    sender_balance = get_balance(sender_id)
+    recipient_balance = get_balance(recipient_id)
+
+    if sender_balance < amount:
+        return await ctx.send("❌ You don't have enough coins to donate.")
+
+    set_balance(sender_id, sender_balance - amount)
+    set_balance(recipient_id, recipient_balance + amount)
+
+    await ctx.send(f"✅ {ctx.author.mention} donated {amount} coins to {member.mention}!")
+
 
 # ------------------ BANK COMMANDS ------------------
 
