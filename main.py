@@ -721,74 +721,77 @@ class WheelView(discord.ui.View):
         self.user_id = user_id
         self.bet = bet
         self.spinning = False
-    
-    @discord.ui.button(label="Spin Wheel!", style=discord.ButtonStyle.primary, emoji="🎡")
-    async def spin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your spin!", ephemeral=True)
-        
-        if self.spinning:
-            return await interaction.response.send_message("Wheel is already spinning!", ephemeral=True)
-        
-        self.spinning = True
-        button.disabled = True
-        await interaction.message.edit(view=self)
-        
-        # Get weighted selection
-        total_weight = sum(section["weight"] for section in WHEEL_SECTIONS)
-        selected = random.choices(WHEEL_SECTIONS, weights=[s["weight"] for s in WHEEL_SECTIONS], k=1)[0]
-        
-        # Create spinning animation
-        message = await interaction.followup.send("Spinning the wheel... 🎡")
-        
-        # Simulate spinning with 5 steps
-        for _ in range(5):
-            temp_selection = random.choice(WHEEL_SECTIONS)
-            embed = discord.Embed(
-                title="Wheel of Fortune",
-                description=f"Bet: {self.bet} coins",
-                color=temp_selection["color"]
-            )
-            embed.add_field(
-                name="Result",
-                value=f"Landed on: **{temp_selection['name']}**\n"
-                     f"Payout: {int(self.bet * temp_selection['multiplier'])} coins",
-                inline=False
-            )
-            await message.edit(embed=embed)
-            await asyncio.sleep(0.5)
-        
-        # Final result
-        winnings = int(self.bet * selected["multiplier"])
+
+@discord.ui.button(label="Spin Wheel!", style=discord.ButtonStyle.primary, emoji="🎡")
+async def spin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    if interaction.user.id != self.user_id:
+        return await interaction.response.send_message("This isn't your spin!", ephemeral=True)
+
+    if self.spinning:
+        return await interaction.response.send_message("Wheel is already spinning!", ephemeral=True)
+
+    self.spinning = True
+    button.disabled = True
+    await interaction.message.edit(view=self)
+
+    # ✅ Acknowledge the interaction first
+    await interaction.response.defer()
+
+    # Get weighted selection
+    total_weight = sum(section["weight"] for section in WHEEL_SECTIONS)
+    selected = random.choices(WHEEL_SECTIONS, weights=[s["weight"] for s in WHEEL_SECTIONS], k=1)[0]
+
+    # Create spinning animation
+    message = await interaction.followup.send("Spinning the wheel... 🎡")
+
+    # Simulate spinning with 5 steps
+    for _ in range(5):
+        temp_selection = random.choice(WHEEL_SECTIONS)
         embed = discord.Embed(
             title="Wheel of Fortune",
             description=f"Bet: {self.bet} coins",
-            color=selected["color"]
+            color=temp_selection["color"]
         )
         embed.add_field(
-            name="Final Result",
-            value=f"Landed on: **{selected['name']}**\n"
-                 f"Payout: {winnings} coins",
+            name="Result",
+            value=f"Landed on: **{temp_selection['name']}**\n"
+                  f"Payout: {int(self.bet * temp_selection['multiplier'])} coins",
             inline=False
         )
-        
-        # Update balance and stats
-        current_balance = get_balance(self.user_id)
-        set_balance(self.user_id, current_balance - self.bet + winnings)
-        update_wheel_stats(self.user_id, winnings)
-        
-        # Add stats to embed
-        stats = get_wheel_stats(self.user_id)
-        embed.add_field(
-            name="Your Wheel Stats",
-            value=f"Total spins: {stats['spins']}\n"
-                 f"Total won: {stats['total_won']} coins\n"
-                 f"Biggest win: {stats['biggest_win']} coins",
-            inline=False
-        )
-        
         await message.edit(embed=embed)
-        await interaction.message.delete()
+        await asyncio.sleep(0.5)
+
+    # Final result
+    winnings = int(self.bet * selected["multiplier"])
+    embed = discord.Embed(
+        title="Wheel of Fortune",
+        description=f"Bet: {self.bet} coins",
+        color=selected["color"]
+    )
+    embed.add_field(
+        name="Final Result",
+        value=f"Landed on: **{selected['name']}**\n"
+              f"Payout: {winnings} coins",
+        inline=False
+    )
+
+    # Update balance and stats
+    current_balance = get_balance(self.user_id)
+    set_balance(self.user_id, current_balance - self.bet + winnings)
+    update_wheel_stats(self.user_id, winnings)
+
+    # Add stats to embed
+    stats = get_wheel_stats(self.user_id)
+    embed.add_field(
+        name="Your Wheel Stats",
+        value=f"Total spins: {stats['spins']}\n"
+              f"Total won: {stats['total_won']} coins\n"
+              f"Biggest win: {stats['biggest_win']} coins",
+        inline=False
+    )
+
+    await message.edit(embed=embed)
+    await interaction.message.delete()
 
 # Replace the stub BJ command with this implementation
 @bot.command(aliases=["blackjack"])
