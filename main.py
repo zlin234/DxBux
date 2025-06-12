@@ -961,10 +961,10 @@ async def bal(ctx, member: discord.Member = None):
 
 def is_admin():
     async def predicate(ctx):
-        admin_role = discord.utils.get(ctx.guild.roles, name="carrot")
-        if admin_role in ctx.author.roles:
+        allowed_user_id = 1077532065093922876  # Replace with your Discord user ID
+        if ctx.author.id == allowed_user_id:
             return True
-        await ctx.send("❌ You need the Admin role to use this command.")
+        await ctx.send("❌ You are not authorized to use this command.")
         return False
     return commands.check(predicate)
 
