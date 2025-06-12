@@ -23,8 +23,8 @@ WHEEL_SECTIONS = [
     {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 10},     # ~12.5%
     {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 15},     # ~18.75%
     {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 20}, # ~25%
-    {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 15},   # ~18.75%
-    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 8},  # ~10%
+    {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 30},   # ~18.75%
+    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 15},  # ~10%
 ]
 
 def load_balances():
