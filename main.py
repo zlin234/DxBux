@@ -21,16 +21,29 @@ WHEEL_SECTIONS = [
     {"name": "100x", "multiplier": 100, "color": 0xFF0000, "weight": 2},  # ~2.5%
     {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 8},    # ~10%
     {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 10},     # ~12.5%
-    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 15},     # ~18.75%
-    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 20}, # ~25%
+    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 10},     # ~18.75%
+    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 15}, # ~25%
     {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 30},   # ~18.75%
-    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 15},  # ~10%
+    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 25},  # ~10%
 ]
 PLINKO_ROWS = 7
 PLINKO_WIDTH = 13  # Should be odd number
 PLINKO_MULTIPLIERS = {
-    0: 0.5, 2: 1.0, 4: 2.0, 6: 5.0, 8: 2.0, 10: 1.0, 12: 0.5
+    0: 0.0,   # <- 0x
+    1: 0.5,
+    2: 1.0,
+    3: 1.5,
+    4: 2.0,
+    5: 3.0,
+    6: 5.0,   # <- center, best payout
+    7: 3.0,
+    8: 2.0,
+    9: 1.5,
+    10: 1.0,
+    11: 0.5,
+    12: 0.0   # <- 0x
 }
+
 
 def load_balances():
     try:
@@ -895,7 +908,7 @@ async def plinko(ctx, amount: int):
     message = await ctx.send(f"**Plinko Ball Drop!**\n{render_tilted_board(board, (0, col))}")
 
     for row in range(PLINKO_ROWS):
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.2)
         move = random.choice([-1, 1])
         col = max(0, min(col + move, PLINKO_WIDTH - 1))
         await message.edit(content=f"**Plinko Ball Drop!**\n{render_tilted_board(board, (row + 1, col))}")
