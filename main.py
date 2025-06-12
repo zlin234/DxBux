@@ -1,6 +1,8 @@
 import os
 import time
 import discord
+import asyncio
+from typing import List, Dict, Tuple
 from discord.ext import commands
 import random
 import json
@@ -15,6 +17,15 @@ BALANCE_FILE = "balances.json"
 BANK_FILE = "bank_data.json"
 LOANS_FILE = "loans.json"
 ALLOWANCE_FILE = "allowance.json"
+WHEEL_SECTIONS = [
+    {"name": "100x", "multiplier": 100, "color": 0xFF0000, "weight": 1},
+    {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 5},
+    {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 10},
+    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 20},
+    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 30},
+    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 30},
+    {"name": "Lose", "multiplier": 0, "color": 0x000000, "weight": 50}
+]
 
 def load_balances():
     try:
@@ -528,6 +539,321 @@ async def bank(ctx):
         
         message += "\nTo change your plan, use `-bank` again."
         await ctx.send(message)
+
+# ------------------ WHEEL/BLACKJACK ------------------
+
+def get_wheel_stats(user_id: int) -> Dict:
+    try:
+        with open("wheel_stats.json", "r") as f:
+            all_stats = json.load(f)
+            return all_stats.get(str(user_id), {"spins": 0, "total_won": 0, "biggest_win": 0})
+    except FileNotFoundError:
+        return {"spins": 0, "total_won": 0, "biggest_win": 0}
+
+def update_wheel_stats(user_id: int, amount_won: int):
+    try:
+        with open("wheel_stats.json", "r") as f:
+            all_stats = json.load(f)
+    except FileNotFoundError:
+        all_stats = {}
+    
+    user_stats = all_stats.get(str(user_id), {"spins": 0, "total_won": 0, "biggest_win": 0})
+    user_stats["spins"] += 1
+    user_stats["total_won"] += amount_won
+    if amount_won > user_stats["biggest_win"]:
+        user_stats["biggest_win"] = amount_won
+    
+    all_stats[str(user_id)] = user_stats
+    
+    with open("wheel_stats.json", "w") as f:
+        json.dump(all_stats, f)
+
+# Add this class for Blackjack
+class BlackjackGame:
+    def __init__(self, player_id: int, bet: int):
+        self.player_id = player_id
+        self.bet = bet
+        self.deck = self.create_deck()
+        self.player_hand = []
+        self.dealer_hand = []
+        self.game_over = False
+        self.outcome = ""
+        self.payout = 0
+        
+        # Deal initial cards
+        self.player_hand.append(self.draw_card())
+        self.dealer_hand.append(self.draw_card())
+        self.player_hand.append(self.draw_card())
+        self.dealer_hand.append(self.draw_card())
+    
+    @staticmethod
+    def create_deck() -> List[Dict]:
+        ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+        suits = ['♥', '♦', '♣', '♠']
+        deck = [{'rank': rank, 'suit': suit} for suit in suits for rank in ranks]
+        random.shuffle(deck)
+        return deck
+    
+    def draw_card(self) -> Dict:
+        return self.deck.pop()
+    
+    def calculate_hand_value(self, hand: List[Dict]) -> int:
+        value = 0
+        aces = 0
+        
+        for card in hand:
+            rank = card['rank']
+            if rank in ['J', 'Q', 'K']:
+                value += 10
+            elif rank == 'A':
+                value += 11
+                aces += 1
+            else:
+                value += int(rank)
+        
+        while value > 21 and aces > 0:
+            value -= 10
+            aces -= 1
+            
+        return value
+    
+    def hit(self):
+        if not self.game_over:
+            self.player_hand.append(self.draw_card())
+            if self.calculate_hand_value(self.player_hand) > 21:
+                self.stand()
+    
+    def stand(self):
+        if not self.game_over:
+            self.game_over = True
+            player_value = self.calculate_hand_value(self.player_hand)
+            dealer_value = self.calculate_hand_value(self.dealer_hand)
+            
+            # Dealer draws until 17 or higher
+            while dealer_value < 17 and player_value <= 21:
+                self.dealer_hand.append(self.draw_card())
+                dealer_value = self.calculate_hand_value(self.dealer_hand)
+            
+            # Determine outcome
+            if player_value > 21:
+                self.outcome = "Bust! You went over 21."
+                self.payout = 0
+            elif dealer_value > 21:
+                self.outcome = "Dealer busts! You win!"
+                self.payout = self.bet * 2
+            elif player_value > dealer_value:
+                self.outcome = f"You win! {player_value} vs {dealer_value}"
+                self.payout = self.bet * 2
+            elif player_value == dealer_value:
+                self.outcome = f"Push! {player_value} vs {dealer_value}"
+                self.payout = self.bet
+            else:
+                self.outcome = f"You lose! {player_value} vs {dealer_value}"
+                self.payout = 0
+    
+    def get_hand_as_string(self, hand: List[Dict], hide_first: bool = False) -> str:
+        if hide_first:
+            return f"?? {hand[1]['rank']}{hand[1]['suit']}"
+        return " ".join(f"{card['rank']}{card['suit']}" for card in hand)
+    
+    def get_embed(self) -> discord.Embed:
+        embed = discord.Embed(title="Blackjack", color=0x00FF00)
+        
+        dealer_value = "??" if not self.game_over else self.calculate_hand_value(self.dealer_hand)
+        embed.add_field(
+            name=f"Dealer's Hand ({dealer_value})",
+            value=self.get_hand_as_string(self.dealer_hand, not self.game_over),
+            inline=False
+        )
+        
+        player_value = self.calculate_hand_value(self.player_hand)
+        embed.add_field(
+            name=f"Your Hand ({player_value})",
+            value=self.get_hand_as_string(self.player_hand),
+            inline=False
+        )
+        
+        if self.game_over:
+            embed.add_field(
+                name="Result",
+                value=f"{self.outcome}\nPayout: {self.payout} coins",
+                inline=False
+            )
+            embed.color = 0xFF0000 if self.payout < self.bet else 0x00FF00
+        
+        embed.set_footer(text=f"Bet: {self.bet} coins")
+        return embed
+
+# Add this view for Blackjack
+class BlackjackView(discord.ui.View):
+    def __init__(self, game: BlackjackGame):
+        super().__init__(timeout=60)
+        self.game = game
+    
+    async def update_message(self, interaction: discord.Interaction):
+        embed = self.game.get_embed()
+        if self.game.game_over:
+            await interaction.response.edit_message(embed=embed, view=None)
+            # Update player's balance
+            current_balance = get_balance(self.game.player_id)
+            set_balance(self.game.player_id, current_balance - self.game.bet + self.game.payout)
+        else:
+            await interaction.response.edit_message(embed=embed, view=self)
+    
+    @discord.ui.button(label="Hit", style=discord.ButtonStyle.primary)
+    async def hit_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.game.player_id:
+            return await interaction.response.send_message("This isn't your game!", ephemeral=True)
+        self.game.hit()
+        await self.update_message(interaction)
+    
+    @discord.ui.button(label="Stand", style=discord.ButtonStyle.secondary)
+    async def stand_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.game.player_id:
+            return await interaction.response.send_message("This isn't your game!", ephemeral=True)
+        self.game.stand()
+        await self.update_message(interaction)
+
+# Add this view for Wheel
+class WheelView(discord.ui.View):
+    def __init__(self, user_id: int, bet: int):
+        super().__init__(timeout=30)
+        self.user_id = user_id
+        self.bet = bet
+        self.spinning = False
+    
+    @discord.ui.button(label="Spin Wheel!", style=discord.ButtonStyle.primary, emoji="🎡")
+    async def spin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your spin!", ephemeral=True)
+        
+        if self.spinning:
+            return await interaction.response.send_message("Wheel is already spinning!", ephemeral=True)
+        
+        self.spinning = True
+        button.disabled = True
+        await interaction.message.edit(view=self)
+        
+        # Get weighted selection
+        total_weight = sum(section["weight"] for section in WHEEL_SECTIONS)
+        selected = random.choices(WHEEL_SECTIONS, weights=[s["weight"] for s in WHEEL_SECTIONS], k=1)[0]
+        
+        # Create spinning animation
+        message = await interaction.followup.send("Spinning the wheel... 🎡")
+        
+        # Simulate spinning with 5 steps
+        for _ in range(5):
+            temp_selection = random.choice(WHEEL_SECTIONS)
+            embed = discord.Embed(
+                title="Wheel of Fortune",
+                description=f"Bet: {self.bet} coins",
+                color=temp_selection["color"]
+            )
+            embed.add_field(
+                name="Result",
+                value=f"Landed on: **{temp_selection['name']}**\n"
+                     f"Payout: {int(self.bet * temp_selection['multiplier'])} coins",
+                inline=False
+            )
+            await message.edit(embed=embed)
+            await asyncio.sleep(0.5)
+        
+        # Final result
+        winnings = int(self.bet * selected["multiplier"])
+        embed = discord.Embed(
+            title="Wheel of Fortune",
+            description=f"Bet: {self.bet} coins",
+            color=selected["color"]
+        )
+        embed.add_field(
+            name="Final Result",
+            value=f"Landed on: **{selected['name']}**\n"
+                 f"Payout: {winnings} coins",
+            inline=False
+        )
+        
+        # Update balance and stats
+        current_balance = get_balance(self.user_id)
+        set_balance(self.user_id, current_balance - self.bet + winnings)
+        update_wheel_stats(self.user_id, winnings)
+        
+        # Add stats to embed
+        stats = get_wheel_stats(self.user_id)
+        embed.add_field(
+            name="Your Wheel Stats",
+            value=f"Total spins: {stats['spins']}\n"
+                 f"Total won: {stats['total_won']} coins\n"
+                 f"Biggest win: {stats['biggest_win']} coins",
+            inline=False
+        )
+        
+        await message.edit(embed=embed)
+        await interaction.message.delete()
+
+# Replace the stub BJ command with this implementation
+@bot.command(aliases=["blackjack"])
+async def bj(ctx, amount: int):
+    """Play a game of Blackjack"""
+    user_id = ctx.author.id
+    current_balance = get_balance(user_id)
+    
+    if amount <= 0:
+        return await ctx.send("❌ Bet must be more than 0.")
+    if current_balance < amount:
+        return await ctx.send("❌ You don't have enough balance.")
+    
+    game = BlackjackGame(user_id, amount)
+    view = BlackjackView(game)
+    
+    embed = game.get_embed()
+    await ctx.send(embed=embed, view=view)
+
+# Add this new wheel command
+@bot.command(aliases=["spin"])
+async def wheel(ctx, amount: int):
+    """Spin the wheel of fortune with your bet"""
+    user_id = ctx.author.id
+    current_balance = get_balance(user_id)
+    
+    if amount <= 0:
+        return await ctx.send("❌ Bet must be more than 0.")
+    if current_balance < amount:
+        return await ctx.send("❌ You don't have enough balance.")
+    
+    # Show wheel sections
+    embed = discord.Embed(
+        title="Wheel of Fortune",
+        description=f"Bet: {amount} coins\n\n"
+                   "Possible outcomes:",
+        color=0x7289DA
+    )
+    
+    for section in WHEEL_SECTIONS:
+        embed.add_field(
+            name=section["name"],
+            value=f"{section['multiplier']}x payout",
+            inline=True
+        )
+    
+    view = WheelView(user_id, amount)
+    await ctx.send(embed=embed, view=view)
+
+# Add this command to check wheel stats
+@bot.command()
+async def wheelstats(ctx, member: discord.Member = None):
+    """Check your wheel spin statistics"""
+    user = member or ctx.author
+    stats = get_wheel_stats(user.id)
+    
+    embed = discord.Embed(
+        title=f"{user.display_name}'s Wheel Stats",
+        color=0x7289DA
+    )
+    embed.add_field(name="Total Spins", value=stats["spins"], inline=True)
+    embed.add_field(name="Total Won", value=f"{stats['total_won']} coins", inline=True)
+    embed.add_field(name="Biggest Win", value=f"{stats['biggest_win']} coins", inline=True)
+    
+    await ctx.send(embed=embed)
 
 # ------------------ COIN FLIP BUTTONS ------------------
 
