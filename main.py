@@ -19,12 +19,13 @@ LOANS_FILE = "loans.json"
 ALLOWANCE_FILE = "allowance.json"
 WHEEL_SECTIONS = [
     {"name": "100x", "multiplier": 100, "color": 0xFF0000, "weight": 1},
-    {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 5},
-    {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 10},
-    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 20},
-    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 30},
-    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 30},
-    {"name": "Lose", "multiplier": 0, "color": 0x000000, "weight": 50}
+    {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 4},
+    {"name": "5x", "multiplier": 5, "color": 0x0000FF, "weight": 15},
+    {"name": "2x", "multiplier": 2, "color": 0xFFFF00, "weight": 10},
+    {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 25},
+    {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 20},
+    {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 15},
+    {"name": "Lose", "multiplier": 0, "color": 0x000000, "weight": 10}
 ]
 
 def load_balances():
