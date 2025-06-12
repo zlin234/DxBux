@@ -10,6 +10,7 @@ from threading import Thread
 from flask import Flask
 import re
 from datetime import datetime, timedelta
+from discord.ext.commands import cooldown, BucketType, CommandOnCooldown
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
@@ -43,6 +44,7 @@ PLINKO_MULTIPLIERS = {
     11: 0.5,
     12: 0.0   # <- 0x
 }
+TOGGLES_FILE = "command_toggles.json"
 
 
 def load_balances():
@@ -300,6 +302,43 @@ async def myloan(ctx):
     message += "\nUse `-repayloan` to repay your loan."
     await ctx.send(message)
 
+# TOGGLES
+
+
+def load_toggles():
+    try:
+        with open(TOGGLES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_toggles(data):
+    with open(TOGGLES_FILE, "w") as f:
+        json.dump(data, f)
+
+def is_command_enabled(command_name):
+    toggles = load_toggles()
+    return toggles.get(command_name, True)  # Enabled by default
+
+def toggle_command(command_name):
+    toggles = load_toggles()
+    toggles[command_name] = not toggles.get(command_name, True)
+    save_toggles(toggles)
+    return toggles[command_name]
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def toggle(ctx, command_name: str):
+    """Admin-only command to toggle any command on or off."""
+    command = bot.get_command(command_name)
+
+    if not command:
+        return await ctx.send("❌ That command doesn't exist.")
+
+    new_state = toggle_command(command_name)
+    state_str = "enabled ✅" if new_state else "disabled ❌"
+    await ctx.send(f"🔧 Command `{command_name}` is now {state_str}.")
+
 # ------------------ ALLOWANCE COMMANDS ------------------
 
 @bot.command()
@@ -334,75 +373,58 @@ async def allowance(ctx):
 # RANDOM COMMANDS
 
 @bot.command()
+@commands.cooldown(1, 60, BucketType.user)  # 1-minute cooldown
 async def rob(ctx, member: discord.Member):
-    """Attempt to rob another user with a chance of failure."""
-    robber_id = ctx.author.id
-    victim_id = member.id
-
-    if member.bot:
-        return await ctx.send("❌ You can't rob bots.")
-    if robber_id == victim_id:
+    if not is_command_enabled("rob"):
+        return await ctx.send("🚫 This command is currently disabled by an admin.")
+    
+    if member.id == ctx.author.id:
         return await ctx.send("❌ You can't rob yourself.")
 
-    robber_balance = get_balance(robber_id)
-    victim_balance = get_balance(victim_id)
+    victim_balance = get_balance(member.id)
+    robber_balance = get_balance(ctx.author.id)
 
-    if victim_balance < 50:
-        return await ctx.send("❌ That user doesn’t have enough coins to rob.")
-    if robber_balance < 25:
-        return await ctx.send("❌ You need at least 25 coins to attempt a robbery.")
+    if victim_balance <= 0:
+        return await ctx.send("❌ That user has nothing to steal.")
 
-    # Robbery chance
-    success = random.random() < 0.2  # 50% success chance
+    stolen_amount = random.randint(1, int(victim_balance * 0.4))
+    set_balance(member.id, victim_balance - stolen_amount)
+    set_balance(ctx.author.id, robber_balance + stolen_amount)
 
-    if success:
-        stolen = random.randint(10, min(100, victim_balance // 2))
-        set_balance(robber_id, robber_balance + stolen)
-        set_balance(victim_id, victim_balance - stolen)
-        await ctx.send(f"💰 {ctx.author.mention} successfully robbed {stolen} coins from {member.mention}!")
-    else:
-        penalty = random.randint(10, 30)
-        penalty = min(penalty, robber_balance)  # Don't go negative
-        set_balance(robber_id, robber_balance - penalty)
-        await ctx.send(f"🚨 {ctx.author.mention} got caught trying to rob {member.mention} and lost {penalty} coins!")
-
+    await ctx.send(f"💰 You robbed {member.mention} and stole {stolen_amount} coins!")
+    
 @bot.command()
 async def tax(ctx, member: discord.Member):
-    """Rich players can tax others at a cost."""
-    taxer_id = ctx.author.id
-    victim_id = member.id
-
-    if member.bot:
-        return await ctx.send("❌ You can't tax bots.")
-    if taxer_id == victim_id:
+    if not is_command_enabled("tax"):
+        return await ctx.send("🚫 This command is currently disabled by an admin.")
+    
+    if member.id == ctx.author.id:
         return await ctx.send("❌ You can't tax yourself.")
 
-    taxer_balance = get_balance(taxer_id)
+    rich_id = ctx.author.id
+    victim_id = member.id
+
+    rich_balance = get_balance(rich_id)
     victim_balance = get_balance(victim_id)
-
-    required_balance = 10000  # Minimum to tax
-
-    if taxer_balance < required_balance:
-        return await ctx.send("❌ You need at least 10,000 coins to tax others.")
 
     if victim_balance <= 0:
         return await ctx.send("❌ That user has no coins to tax.")
 
-    # Victim loses 25% of their balance
-    taxed_amount = int(victim_balance * 0.10)
-    penalty_cost = int(taxed_amount * 2)  # Taxer's penalty
+    taxed_amount = int(victim_balance * 0.25)
+    tax_cost = taxed_amount
 
-    # Ensure taxer doesn't go negative
-    penalty_cost = min(penalty_cost, taxer_balance)
+    if rich_balance < tax_cost:
+        return await ctx.send("❌ You don't have enough coins to tax this user.")
 
-    # Update balances
+    # Transfer logic
+    set_balance(rich_id, rich_balance - tax_cost + taxed_amount)
     set_balance(victim_id, victim_balance - taxed_amount)
-    set_balance(taxer_id, taxer_balance - penalty_cost)
 
     await ctx.send(
-        f"💼 {ctx.author.mention} taxed {member.mention} for **{taxed_amount} coins**!\n"
-        f"🧾 {ctx.author.mention} paid a tax fee of **{penalty_cost} coins**."
+        f"🏛️ You taxed {member.mention} and they lost {taxed_amount} coins.\n"
+        f"You spent {tax_cost} to do it and gained it back."
     )
+
 
 
 @bot.command()
