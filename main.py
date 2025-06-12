@@ -25,7 +25,7 @@ WHEEL_SECTIONS = [
     {"name": "1.5x", "multiplier": 1.5, "color": 0xFF00FF, "weight": 25},
     {"name": "1.0x", "multiplier": 1, "color": 0xFF00FF, "weight": 20},
     {"name": "0.5x", "multiplier": 0.5, "color": 0x00FFFF, "weight": 15},
-    {"name": "Lose", "multiplier": 0, "color": 0x000000, "weight": 10}
+    {"name": "Lose", "multiplier": 0, "color": 0x000000, "weight": 1}
 ]
 
 def load_balances():
