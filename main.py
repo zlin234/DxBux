@@ -7,11 +7,14 @@ import json
 from threading import Thread
 from flask import Flask
 import re
+from datetime import datetime, timedelta
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
 BALANCE_FILE = "balances.json"
 BANK_FILE = "bank_data.json"
+LOANS_FILE = "loans.json"
+ALLOWANCE_FILE = "allowance.json"
 
 def load_balances():
     try:
@@ -32,6 +35,70 @@ def set_balance(user_id, amount):
     balances = load_balances()
     balances[str(user_id)] = amount
     save_balances(balances)
+
+# ------------------ LOAN MANAGEMENT ------------------
+
+def load_loans():
+    try:
+        with open(LOANS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_loans(loans):
+    with open(LOANS_FILE, "w") as f:
+        json.dump(loans, f)
+
+def get_loan(user_id):
+    loans = load_loans()
+    return loans.get(str(user_id), None)
+
+def create_loan(user_id, amount, interest_rate=0.1, duration_days=7):
+    loans = load_loans()
+    due_date = datetime.now() + timedelta(days=duration_days)
+    loans[str(user_id)] = {
+        "amount": amount,
+        "interest_rate": interest_rate,
+        "due_date": due_date.timestamp(),
+        "created_at": datetime.now().timestamp(),
+        "repaid": False
+    }
+    save_loans(loans)
+    return loans[str(user_id)]
+
+def repay_loan(user_id):
+    loans = load_loans()
+    if str(user_id) not in loans:
+        return False
+    loans[str(user_id)]["repaid"] = True
+    save_loans(loans)
+    return True
+
+# ------------------ ALLOWANCE MANAGEMENT ------------------
+
+def load_allowances():
+    try:
+        with open(ALLOWANCE_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_allowances(allowances):
+    with open(ALLOWANCE_FILE, "w") as f:
+        json.dump(allowances, f)
+
+def can_claim_allowance(user_id):
+    allowances = load_allowances()
+    user_data = allowances.get(str(user_id), {"last_claim": 0})
+    current_time = time.time()
+    return current_time - user_data["last_claim"] >= 1800  # 30 minutes in seconds
+
+def update_allowance_claim(user_id):
+    allowances = load_allowances()
+    if str(user_id) not in allowances:
+        allowances[str(user_id)] = {"last_claim": 0}
+    allowances[str(user_id)]["last_claim"] = time.time()
+    save_allowances(allowances)
 
 # ------------------ BANK MANAGEMENT ------------------
 
@@ -91,6 +158,150 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="-", intents=intents)
+
+# ------------------ LOAN COMMANDS ------------------
+
+@bot.command()
+async def loan(ctx, amount: int):
+    """Take out a loan (10% interest, due in 7 days)"""
+    user_id = ctx.author.id
+    current_balance = get_balance(user_id)
+    
+    # Check for existing loan
+    existing_loan = get_loan(user_id)
+    if existing_loan and not existing_loan["repaid"]:
+        due_date = datetime.fromtimestamp(existing_loan["due_date"])
+        return await ctx.send(
+            f"❌ You already have an outstanding loan of {existing_loan['amount']} coins!\n"
+            f"Due by: {due_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Use `-repayloan` to repay it first."
+        )
+    
+    # Validate amount
+    if amount <= 0:
+        return await ctx.send("❌ Loan amount must be positive.")
+    if amount > 10000:
+        return await ctx.send("❌ Maximum loan amount is 10,000 coins.")
+    
+    # Create loan and give money
+    loan_data = create_loan(user_id, amount)
+    set_balance(user_id, current_balance + amount)
+    
+    due_date = datetime.fromtimestamp(loan_data["due_date"])
+    await ctx.send(
+        f"✅ You've taken out a loan of **{amount} coins**!\n"
+        f"• Interest rate: 10%\n"
+        f"• Total to repay: **{int(amount * 1.1)} coins**\n"
+        f"• Due by: {due_date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"Use `-repayloan` to repay it before the due date to avoid penalties!"
+    )
+
+@bot.command()
+async def repayloan(ctx):
+    """Repay your outstanding loan"""
+    user_id = ctx.author.id
+    current_balance = get_balance(user_id)
+    loan_data = get_loan(user_id)
+    
+    if not loan_data or loan_data["repaid"]:
+        return await ctx.send("❌ You don't have any active loans to repay.")
+    
+    total_to_repay = int(loan_data["amount"] * (1 + loan_data["interest_rate"]))
+    
+    if current_balance < total_to_repay:
+        return await ctx.send(
+            f"❌ You need **{total_to_repay} coins** to repay your loan, but only have **{current_balance} coins**."
+        )
+    
+    # Check if loan is overdue
+    is_overdue = datetime.now().timestamp() > loan_data["due_date"]
+    if is_overdue:
+        penalty = int(total_to_repay * 0.2)  # 20% penalty
+        total_to_repay += penalty
+        await ctx.send(
+            f"⚠️ Your loan is overdue! A 20% penalty of {penalty} coins has been added.\n"
+            f"New total to repay: **{total_to_repay} coins**"
+        )
+    
+    # Deduct money and mark as repaid
+    set_balance(user_id, current_balance - total_to_repay)
+    repay_loan(user_id)
+    
+    await ctx.send(
+        f"✅ You've successfully repaid your loan of **{loan_data['amount']} coins** "
+        f"plus **{int(loan_data['amount'] * loan_data['interest_rate'])} coins** interest!\n"
+        f"• New balance: **{current_balance - total_to_repay} coins**"
+    )
+
+@bot.command()
+async def myloan(ctx):
+    """Check your current loan status"""
+    user_id = ctx.author.id
+    loan_data = get_loan(user_id)
+    
+    if not loan_data or loan_data["repaid"]:
+        return await ctx.send("You don't have any active loans.")
+    
+    created_date = datetime.fromtimestamp(loan_data["created_at"])
+    due_date = datetime.fromtimestamp(loan_data["due_date"])
+    time_left = due_date - datetime.now()
+    
+    total_to_repay = int(loan_data["amount"] * (1 + loan_data["interest_rate"]))
+    
+    message = (
+        f"**Loan Details:**\n"
+        f"• Amount borrowed: **{loan_data['amount']} coins**\n"
+        f"• Interest rate: **10%**\n"
+        f"• Total to repay: **{total_to_repay} coins**\n"
+        f"• Taken on: {created_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"• Due by: {due_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    
+    if datetime.now().timestamp() > loan_data["due_date"]:
+        penalty = int(total_to_repay * 0.2)
+        message += (
+            f"⚠️ **OVERDUE!** 20% penalty applies: **{penalty} coins**\n"
+            f"New total to repay: **{total_to_repay + penalty} coins**\n"
+        )
+    else:
+        hours = int(time_left.total_seconds() // 3600)
+        minutes = int((time_left.total_seconds() % 3600) // 60)
+        message += f"• Time remaining: **{hours}h {minutes}m**\n"
+    
+    message += "\nUse `-repayloan` to repay your loan."
+    await ctx.send(message)
+
+# ------------------ ALLOWANCE COMMANDS ------------------
+
+@bot.command()
+async def allowance(ctx):
+    """Claim your 100 coin allowance (every 30 minutes)"""
+    user_id = ctx.author.id
+    
+    if can_claim_allowance(user_id):
+        current_balance = get_balance(user_id)
+        set_balance(user_id, current_balance + 100)
+        update_allowance_claim(user_id)
+        await ctx.send(
+            f"💰 You've claimed your **100 coin** allowance!\n"
+            f"• New balance: **{current_balance + 100} coins**\n"
+            f"• Next allowance available in 30 minutes."
+        )
+    else:
+        allowances = load_allowances()
+        last_claim = allowances.get(str(user_id), {}).get("last_claim", 0)
+        next_claim = last_claim + 1800  # 30 minutes in seconds
+        time_left = next_claim - time.time()
+        
+        if time_left > 0:
+            minutes = int(time_left // 60)
+            seconds = int(time_left % 60)
+            await ctx.send(
+                f"⏳ You can claim your next allowance in **{minutes}m {seconds}s**.\n"
+                f"Type `-allowance` then to get 100 coins!"
+            )
+        else:
+            await ctx.send("Something went wrong. Try again!")
 
 # ------------------ BANK COMMANDS ------------------
 
@@ -402,10 +613,18 @@ async def bal(ctx, member: discord.Member = None):
     bank_data = get_bank_data(member.id)
     plan_name = BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'
     
+    # Check for active loan
+    loan_data = get_loan(member.id)
+    loan_info = ""
+    if loan_data and not loan_data["repaid"]:
+        due_date = datetime.fromtimestamp(loan_data["due_date"])
+        loan_info = f"\n• Loan: ⚠️ **{loan_data['amount']} coins** (due {due_date.strftime('%Y-%m-%d')})"
+    
     await ctx.send(
         f"**{member.display_name}'s balances:**\n"
         f"• Wallet: 💰 **{balance} coins**\n"
         f"• Bank: 🏦 **{bank_data['deposited']} coins** ({plan_name})"
+        f"{loan_info}"
     )
 
 # ------------------ ADMIN CHECK DECORATOR ------------------
@@ -435,45 +654,48 @@ async def checkall(ctx):
     """Export all user balances and bank data"""
     balances = load_balances()
     bank_data = load_bank_data()
+    loans = load_loans()
     
     output = []
-    # Combine user IDs from both files
-    all_user_ids = set(balances.keys()) | set(bank_data.keys())
+    # Combine user IDs from all files
+    all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys())
     
     for user_id in all_user_ids:
         wallet = balances.get(user_id, 1000)  # Default to 1000 if not found
         b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
         plan = b_data["plan"] or "None"
         deposited = b_data["deposited"]
-        # Use pipe (|) as delimiter instead of colon
-        output.append(f"{user_id}|{wallet}|{plan}|{deposited}")
+        
+        # Loan info
+        loan_info = loans.get(user_id, {})
+        has_loan = "Y" if loan_info and not loan_info.get("repaid", True) else "N"
+        
+        # Use pipe (|) as delimiter
+        output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{has_loan}")
     
     data = "\n".join(output)
-    # Use a code block with specific language to prevent formatting issues
     await ctx.send(f"```data\n{data}```")
 
 @bot.command()
 @is_admin()
 async def setall(ctx, *, data: str):
     """Import all user balances and bank data"""
-    # Remove code block markers if present
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
-        # Remove optional language specifier
         if data.startswith('data\n'):
             data = data[5:]
     
     lines = data.split('\n')
     balances = {}
     bank_data = {}
+    loans = {}
     
     for line in lines:
         if not line.strip():
             continue
             
-        # Split using pipe delimiter
         parts = line.split('|')
-        if len(parts) != 4:
+        if len(parts) < 4:
             continue
             
         try:
@@ -482,20 +704,27 @@ async def setall(ctx, *, data: str):
             plan = parts[2].strip()
             deposited = int(parts[3].strip())
             
-            # Add to balances
             balances[user_id] = wallet
-            
-            # Add to bank data
             bank_data[user_id] = {
                 "plan": None if plan.lower() == "none" else plan,
                 "deposited": deposited
             }
+            
+            # Handle loan data if present
+            if len(parts) > 4 and parts[4].strip().upper() == "Y":
+                loans[user_id] = {
+                    "amount": 1000,  # Default loan amount
+                    "interest_rate": 0.1,
+                    "due_date": (datetime.now() + timedelta(days=7)).timestamp(),
+                    "created_at": datetime.now().timestamp(),
+                    "repaid": False
+                }
         except ValueError:
             continue
     
-    # Save the data
     save_balances(balances)
     save_bank_data(bank_data)
+    save_loans(loans)
     
     await ctx.send(f"✅ Successfully imported data for {len(balances)} users!")
 
@@ -509,7 +738,6 @@ async def bj(ctx, amount: int):
         return await ctx.send("❌ Bet must be more than 0.")
     if current_balance < amount:
         return await ctx.send("❌ You don't have enough balance.")
-    # TODO: Implement blackjack logic here
     await ctx.send(f"Blackjack is not implemented yet, but you tried to bet {amount} coins!")
 
 @bot.command()
@@ -520,7 +748,6 @@ async def minesweeper(ctx, amount: int):
         return await ctx.send("❌ Bet must be more than 0.")
     if current_balance < amount:
         return await ctx.send("❌ You don't have enough balance.")
-    # TODO: Implement minesweeper logic here
     await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
