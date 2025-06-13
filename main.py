@@ -401,7 +401,7 @@ async def tax(ctx, member: discord.Member):
         return await ctx.send("❌ You don't have enough coins to tax this user.")
 
     # Transfer logic
-    set_balance(rich_id, rich_balance - tax_cost + taxed_amount)
+    set_balance(rich_id, rich_balance - tax_cost * 2)
     set_balance(victim_id, victim_balance - taxed_amount)
 
     await ctx.send(
