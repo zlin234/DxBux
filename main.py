@@ -904,9 +904,6 @@ async def shop(ctx):
         await ctx.send(embed=embed, view=view)
 
 
-import discord
-from discord.ext import commands
-
 class UseItemDropdown(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
@@ -935,14 +932,16 @@ class UseItemDropdown(discord.ui.Select):
         
 
 class QuantitySelect(discord.ui.Select):
-    def __init__(self, max_amount):
+    def __init__(self, item_id, max_amount, row=1, *args, **kwargs):
         options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_amount + 1)]
-        super().__init__(placeholder="Select quantity", options=options, row=1)
-        self.selected_quantity = 1
+        super().__init__(placeholder="Select quantity", options=options, row=row, *args, **kwargs)
+        self.item_id = item_id
+        self.selected_quantity = 1  # default selected quantity
 
     async def callback(self, interaction: discord.Interaction):
         self.selected_quantity = int(self.values[0])
-        self.view.selected_quantity = self.selected_quantity
+        # Store the selected quantity in the view keyed by item_id
+        self.view.selected_quantities[self.item_id] = self.selected_quantity
         await interaction.response.defer()
 
 
