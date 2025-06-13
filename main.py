@@ -342,49 +342,86 @@ async def allowance(ctx):
 
 
 
-# RANDOM COMMANDS
+#-------------------ROB/TAX/DONATE---------------------
 
 @bot.command()
 @commands.cooldown(1, 60, BucketType.user)  # 1-minute cooldown
 async def rob(ctx, member: discord.Member):
-    if member.id == ctx.author.id:
-        return await ctx.send("❌ You can't rob yourself.")
+    try:
+        if member.id == ctx.author.id:
+            embed = discord.Embed(
+                title="⚠️ Invalid Target",
+                description="You can't rob yourself.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
 
-    # Check for protection
-    protection_data = load_rob_protection()
-    if str(member.id) in protection_data and protection_data[str(member.id)] > 0:
-        protection_data[str(member.id)] -= 1
-        save_rob_protection(protection_data)
-        return await ctx.send(
-            f"🔒 {member.mention} is protected by a padlock! Robbery attempt blocked. "
-            f"They have {protection_data[str(member.id)]} protections remaining."
+        # Check for protection
+        protection_data = load_rob_protection()
+        if str(member.id) in protection_data and protection_data[str(member.id)] > 0:
+            protection_data[str(member.id)] -= 1
+            save_rob_protection(protection_data)
+            embed = discord.Embed(
+                title="🔒 Robbery Blocked!",
+                description=f"{member.mention} is protected by a padlock.",
+                color=discord.Color.dark_purple()
+            )
+            embed.add_field(name="🛡️ Protections Left", value=str(protection_data[str(member.id)]), inline=True)
+            embed.set_footer(text="Better luck next time...")
+            return await ctx.send(embed=embed)
+
+        victim_balance = get_balance(member.id)
+        robber_balance = get_balance(ctx.author.id)
+
+        if victim_balance <= 0:
+            embed = discord.Embed(
+                title="🚫 No Coins to Steal",
+                description=f"{member.mention} has nothing to steal.",
+                color=discord.Color.red()
+            )
+            return await ctx.send(embed=embed)
+
+        # Record robbery in history
+        rob_history = load_rob_history()
+        rob_history[str(ctx.author.id)] = {
+            "victim_id": member.id,
+            "timestamp": time.time()
+        }
+        save_rob_history(rob_history)
+
+        stolen_amount = random.randint(1, int(victim_balance * 0.4))
+        set_balance(member.id, victim_balance - stolen_amount)
+        set_balance(ctx.author.id, robber_balance + stolen_amount)
+
+        embed = discord.Embed(
+            title="💰 Robbery Successful!",
+            description=f"{ctx.author.mention} just robbed {member.mention}!",
+            color=discord.Color.green()
         )
+        embed.add_field(name="💸 Amount Stolen", value=f"{stolen_amount} coins", inline=True)
+        embed.set_footer(text="Use your loot wisely...")
 
-    victim_balance = get_balance(member.id)
-    robber_balance = get_balance(ctx.author.id)
+        await ctx.send(embed=embed)
 
-    if victim_balance <= 0:
-        return await ctx.send("❌ That user has nothing to steal.")
-
-    # Record robbery in history
-    rob_history = load_rob_history()
-    rob_history[str(ctx.author.id)] = {
-        "victim_id": member.id,
-        "timestamp": time.time()
-    }
-    save_rob_history(rob_history)
-
-    stolen_amount = random.randint(1, int(victim_balance * 0.4))
-    set_balance(member.id, victim_balance - stolen_amount)
-    set_balance(ctx.author.id, robber_balance + stolen_amount)
-
-    await ctx.send(f"💰 You robbed {member.mention} and stole {stolen_amount} coins!")
+    except CommandOnCooldown as e:
+        seconds = round(e.retry_after)
+        embed = discord.Embed(
+            title="⏳ Cooldown Active",
+            description=f"You're robbing too fast! Try again in `{seconds} seconds`.",
+            color=discord.Color.orange()
+        )
+        return await ctx.send(embed=embed)
 
     
 @bot.command()
 async def tax(ctx, member: discord.Member):
     if member.id == ctx.author.id:
-        return await ctx.send("❌ You can't tax yourself.")
+        embed = discord.Embed(
+            title="⚠️ Invalid Action",
+            description="You can't tax yourself.",
+            color=discord.Color.red()
+        )
+        return await ctx.send(embed=embed)
 
     rich_id = ctx.author.id
     victim_id = member.id
@@ -393,22 +430,38 @@ async def tax(ctx, member: discord.Member):
     victim_balance = get_balance(victim_id)
 
     if victim_balance <= 0:
-        return await ctx.send("❌ That user has no coins to tax.")
+        embed = discord.Embed(
+            title="🚫 No Coins",
+            description=f"{member.mention} has no coins to be taxed.",
+            color=discord.Color.red()
+        )
+        return await ctx.send(embed=embed)
 
     taxed_amount = int(victim_balance * 0.25)
     tax_cost = taxed_amount
 
     if rich_balance < tax_cost:
-        return await ctx.send("❌ You don't have enough coins to tax this user.")
+        embed = discord.Embed(
+            title="💸 Not Enough Funds",
+            description="You don't have enough coins to tax this user.",
+            color=discord.Color.orange()
+        )
+        return await ctx.send(embed=embed)
 
     # Transfer logic
-    set_balance(rich_id, rich_balance - tax_cost * 2)
+    set_balance(rich_id, rich_balance - tax_cost - taxed_amount)
     set_balance(victim_id, victim_balance - taxed_amount)
 
-    await ctx.send(
-        f"🏛️ You taxed {member.mention} and they lost {taxed_amount} coins.\n"
-        f"You lost {tax_cost} to tax them."
+    embed = discord.Embed(
+        title="🏛️ Taxation Successful",
+        color=discord.Color.gold()
     )
+    embed.add_field(name="👤 Target", value=member.mention, inline=True)
+    embed.add_field(name="💰 Taxed From Them", value=f"{taxed_amount} coins", inline=True)
+    embed.add_field(name="💸 Cost to You", value=f"{tax_cost} coins", inline=True)
+    embed.set_footer(text="Economy Tax Command")
+
+    await ctx.send(embed=embed)
 
 
 
@@ -761,130 +814,225 @@ def remove_from_inventory(user_id, item_name, quantity=1):
     return True
 
 
+import discord
+from discord.ext import commands
+
+class QuantitySelect(discord.ui.Select):
+    def __init__(self, item_id, max_quantity):
+        options = [
+            discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_quantity + 1)
+        ]
+        super().__init__(placeholder="Select quantity", min_values=1, max_values=1, options=options)
+        self.item_id = item_id
+        self.selected_quantity = 1
+
+    async def callback(self, interaction: discord.Interaction):
+        self.selected_quantity = int(self.values[0])
+        await interaction.response.send_message(
+            f"Quantity for `{self.item_id}` set to **{self.selected_quantity}**.",
+            ephemeral=True
+        )
+
+class ShopItemRow(discord.ui.View):
+    def __init__(self, user_id, item_id, item_data):
+        super().__init__(timeout=None)
+        self.user_id = user_id
+        self.item_id = item_id
+        self.item_data = item_data
+        self.quantity_select = QuantitySelect(item_id, item_data.get("max_stack", 1))
+        self.add_item(self.quantity_select)
+        self.add_item(ShopBuyButton(item_id, item_data, self.quantity_select))
+
+class ShopBuyButton(discord.ui.Button):
+    def __init__(self, item_id, item_data, quantity_select):
+        super().__init__(label=f"Buy {item_data['name']}", style=discord.ButtonStyle.green)
+        self.item_id = item_id
+        self.item_data = item_data
+        self.quantity_select = quantity_select
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.view.user_id:
+            return await interaction.response.send_message("❌ This UI isn't for you.", ephemeral=True)
+
+        quantity = self.quantity_select.selected_quantity
+        total_price = self.item_data["price"] * quantity
+        user_id = interaction.user.id
+        balance = get_balance(user_id)
+        max_stack = self.item_data.get("max_stack", 1)
+
+        # Check balance
+        if balance < total_price:
+            return await interaction.response.send_message(
+                f"❌ You need {total_price} coins to buy {quantity}x {self.item_data['name']}, "
+                f"but only have {balance} coins.",
+                ephemeral=True
+            )
+
+        # Check stack limit
+        user_inv = get_inventory(user_id)
+        current_qty = user_inv.get(self.item_id, 0)
+        if current_qty + quantity > max_stack:
+            return await interaction.response.send_message(
+                f"❌ You can only hold {max_stack} of {self.item_data['name']} (you have {current_qty}).",
+                ephemeral=True
+            )
+
+        # Process purchase
+        set_balance(user_id, balance - total_price)
+        add_to_inventory(user_id, self.item_id, quantity)
+        await interaction.response.send_message(
+            f"✅ Purchased {quantity}x {self.item_data['name']} for {total_price} coins!", ephemeral=True
+        )
+
 @bot.command()
 async def shop(ctx):
-    """View available items in the shop"""
+    """View and buy items from the shop with quantity selection"""
     shop_items = load_shop_items()
-    embed = discord.Embed(title="Shop", color=0x00FF00)
-    
+    await ctx.send(embed=discord.Embed(
+        title="🛒 Shop",
+        description="Select a quantity then press Buy!",
+        color=discord.Color.green()
+    ))
+
     for item_id, item_data in shop_items.items():
-        embed.add_field(
-            name=f"{item_data['name']} - {item_data['price']} coins",
-            value=f"{item_data['description']}\n"
-                  f"Use `-buy {item_id}` to purchase",
-            inline=False
+        view = ShopItemRow(ctx.author.id, item_id, item_data)
+        embed = discord.Embed(
+            title=item_data["name"],
+            description=f"{item_data['description']}\nPrice: {item_data['price']} coins",
+            color=discord.Color.blurple()
         )
-    
-    await ctx.send(embed=embed)
+        await ctx.send(embed=embed, view=view)
 
-@bot.command()
-async def buy(ctx, item_name: str, quantity: int = 1):
-    """Purchase an item from the shop"""
-    shop_items = load_shop_items()
-    user_id = ctx.author.id
-    
-    if item_name.lower() not in shop_items:
-        return await ctx.send(f"❌ Item '{item_name}' not found in shop. Use `-shop` to see available items.")
-    
-    item_data = shop_items[item_name.lower()]
-    price = item_data["price"] * quantity
-    balance = get_balance(user_id)
-    
-    if balance < price:
-        return await ctx.send(f"❌ You need {price} coins to buy {quantity}x {item_data['name']}, but only have {balance} coins.")
-    
-    # Check if user can hold more of this item
-    user_inv = get_inventory(user_id)
-    current_qty = user_inv.get(item_name.lower(), 0)
-    max_stack = item_data.get("max_stack", 1)
-    
-    if current_qty + quantity > max_stack:
-        return await ctx.send(f"❌ You can only have {max_stack} of {item_data['name']} (you have {current_qty}).")
-    
-    # Deduct coins and add to inventory
-    set_balance(user_id, balance - price)
-    add_to_inventory(user_id, item_name.lower(), quantity)
-    
-    await ctx.send(f"✅ Purchased {quantity}x {item_data['name']} for {price} coins!")
 
-@bot.command()
-async def inventory(ctx, member: discord.Member = None):
-    """View your or another user's inventory"""
-    target = member or ctx.author
-    user_inv = get_inventory(target.id)
-    shop_items = load_shop_items()
-    
-    if not user_inv:
-        return await ctx.send(f"{'You have' if target == ctx.author else f'{target.display_name} has'} no items.")
-    
-    embed = discord.Embed(title=f"{target.display_name}'s Inventory", color=0x7289DA)
-    
-    for item_name, quantity in user_inv.items():
-        item_data = shop_items.get(item_name, {"name": item_name.title(), "description": "No description available"})
-        embed.add_field(
-            name=f"{item_data['name']} x{quantity}",
-            value=item_data["description"],
-            inline=False
+import discord
+from discord.ext import commands
+
+class UseItemDropdown(discord.ui.Select):
+    def __init__(self, user_id):
+        self.user_id = user_id
+        self.user_inv = get_inventory(user_id)
+
+        options = []
+
+        if "padlock" in self.user_inv:
+            options.append(discord.SelectOption(label="Padlock", value="padlock", description="Adds 5x rob protection per padlock"))
+        if "phone" in self.user_inv:
+            options.append(discord.SelectOption(label="Phone", value="phone", description="Arrests recent robbers"))
+
+        if not options:
+            options.append(discord.SelectOption(label="No usable items", value="none", description="Buy some items first", default=True))
+
+        super().__init__(
+            placeholder="Select item to use",
+            min_values=1,
+            max_values=1,
+            options=options
         )
-    
-    await ctx.send(embed=embed)
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_item = self.values[0]
+        await interaction.response.defer()  # Wait for quantity + confirm
+        
+
+class QuantitySelect(discord.ui.Select):
+    def __init__(self, max_amount):
+        options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_amount + 1)]
+        super().__init__(placeholder="Select quantity", options=options, row=1)
+        self.selected_quantity = 1
+
+    async def callback(self, interaction: discord.Interaction):
+        self.selected_quantity = int(self.values[0])
+        self.view.selected_quantity = self.selected_quantity
+        await interaction.response.defer()
+
+
+class UseItemView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.selected_item = None
+        self.selected_quantity = 1
+
+        self.dropdown = UseItemDropdown(user_id)
+        self.add_item(self.dropdown)
+
+        self.quantity_select = QuantitySelect(10)
+        self.add_item(self.quantity_select)
+
+        self.add_item(discord.ui.Button(label="Use Item", style=discord.ButtonStyle.green, custom_id="use", row=2))
+
+    @discord.ui.button(label="Use Item", style=discord.ButtonStyle.green, row=2)
+    async def use_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This menu is not for you.", ephemeral=True)
+
+        item = self.selected_item
+        quantity = self.selected_quantity
+
+        if not item or item == "none":
+            return await interaction.response.send_message("❌ No item selected.", ephemeral=True)
+
+        user_inv = get_inventory(self.user_id)
+        if item not in user_inv:
+            return await interaction.response.send_message("❌ You don't have this item anymore.", ephemeral=True)
+        if item == "padlock":
+            if user_inv[item] < quantity:
+                return await interaction.response.send_message(
+                    f"❌ You only have {user_inv[item]} padlocks, but tried to use {quantity}.", ephemeral=True
+                )
+            protection_data = load_rob_protection()
+            current_protection = protection_data.get(str(self.user_id), 0)
+            protection_data[str(self.user_id)] = current_protection + (5 * quantity)
+            save_rob_protection(protection_data)
+            remove_from_inventory(self.user_id, "padlock", quantity)
+            await interaction.response.send_message(
+                f"🔒 You used {quantity} padlock(s), adding {5 * quantity} protections.\n"
+                f"🛡️ Total protections: **{protection_data[str(self.user_id)]}**", ephemeral=False
+            )
+        elif item == "phone":
+            if user_inv[item] < 1:
+                return await interaction.response.send_message("❌ You don't have a phone.", ephemeral=True)
+
+            rob_history = load_rob_history()
+            recent_robbers = []
+            for robber_id, rob_data in rob_history.items():
+                if time.time() - rob_data["timestamp"] <= 300:
+                    recent_robbers.append((robber_id, rob_data["victim_id"]))
+
+            remove_from_inventory(self.user_id, "phone")
+            arrests = 0
+            for robber_id, victim_id in recent_robbers:
+                if str(victim_id) == str(self.user_id):
+                    robber_balance = get_balance(int(robber_id))
+                    fine = min(robber_balance, 1000)
+                    if fine > 0:
+                        set_balance(int(robber_id), robber_balance - fine)
+                        set_balance(self.user_id, get_balance(self.user_id) + fine)
+                        arrests += 1
+
+            if arrests > 0:
+                await interaction.response.send_message(f"🚨 You arrested {arrests} robber(s) and claimed fines!", ephemeral=False)
+            else:
+                await interaction.response.send_message("🚨 No recent robbers had robbed you.", ephemeral=False)
+
 
 @bot.command()
-async def use(ctx, item_name: str, quantity: int = 1):
-    """Use an item from your inventory"""
+async def use(ctx):
+    """Use an item from your inventory via UI"""
     user_id = ctx.author.id
     user_inv = get_inventory(user_id)
-    
-    if item_name.lower() not in user_inv:
-        return await ctx.send(f"❌ You don't have any {item_name} in your inventory.")
-    
-    if user_inv[item_name.lower()] < quantity:
-        return await ctx.send(f"❌ You only have {user_inv[item_name.lower()]}x {item_name}, but tried to use {quantity}x.")
-    
-    # Handle specific item usage
-    if item_name.lower() == "padlock":
-        protection_data = load_rob_protection()
-        current_protection = protection_data.get(str(user_id), 0)
-        protection_data[str(user_id)] = current_protection + (5 * quantity)
-        save_rob_protection(protection_data)
-        
-        remove_from_inventory(user_id, item_name.lower(), quantity)
-        await ctx.send(f"🔒 You've added {5 * quantity} robbery protections! You'll be protected from the next {current_protection + (5 * quantity)} robbery attempts.")
-    
-    elif item_name.lower() == "phone":
-        # Check rob history for recent robberies
-        rob_history = load_rob_history()
-        recent_robbers = []
-        
-        for robber_id, rob_data in rob_history.items():
-            if time.time() - rob_data["timestamp"] <= 300:  # 5 minutes ago
-                recent_robbers.append((robber_id, rob_data["victim_id"]))
-        
-        if not recent_robbers:
-            return await ctx.send("❌ No recent robberies to report (last 5 minutes).")
-        
-        # Remove phone from inventory
-        remove_from_inventory(user_id, item_name.lower())
-        
-        # Process arrests
-        arrests_made = 0
-        for robber_id, victim_id in recent_robbers:
-            if str(victim_id) == str(user_id):  # Only arrest robbers who robbed you
-                robber_balance = get_balance(int(robber_id))
-                stolen_amount = min(robber_balance, 1000)  # Fine of up to 1000 coins
-                
-                if stolen_amount > 0:
-                    set_balance(int(robber_id), robber_balance - stolen_amount)
-                    set_balance(user_id, get_balance(user_id) + stolen_amount)
-                    arrests_made += 1
-        
-        if arrests_made > 0:
-            await ctx.send(f"🚨 You called the police! {arrests_made} robber(s) who recently robbed you have been arrested and fined!")
-        else:
-            await ctx.send("🚨 You called the police, but none of the recent robbers had robbed you.")
-    
-    else:
-        await ctx.send(f"❌ The {item_name} doesn't have a special use. It may be a passive item.")
+
+    if not any(i in user_inv for i in ["padlock", "phone"]):
+        return await ctx.send("❌ You don't have any usable items right now.")
+
+    view = UseItemView(user_id)
+    embed = discord.Embed(
+        title="🎒 Use an Item",
+        description="Select an item and quantity, then click **Use Item** to activate it.",
+        color=discord.Color.blurple()
+    )
+    await ctx.send(embed=embed, view=view)
+
 
 # ------------------ WHEEL/BLACKJACK ------------------
 
