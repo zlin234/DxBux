@@ -856,9 +856,17 @@ class ShopItemRow(discord.ui.View):
         self.user_id = user_id
         self.item_id = item_id
         self.item_data = item_data
+
+        # ✅ This fixes the "AttributeError"
+        self.selected_quantities = {}
+
+        # Quantity dropdown
         self.quantity_select = QuantitySelect(item_id, item_data.get("max_stack", 1))
         self.add_item(self.quantity_select)
+
+        # Buy button
         self.add_item(ShopBuyButton(item_id, item_data, self.quantity_select))
+
 
 class ShopBuyButton(discord.ui.Button):
     def __init__(self, item_id, item_data, quantity_select):
