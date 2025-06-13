@@ -48,6 +48,29 @@ SHOP_ITEMS_FILE = "shop_items.json"
 INVENTORY_FILE = "inventories.json"
 ROB_PROTECTION_FILE = "rob_protection.json"
 ROB_HISTORY_FILE = "rob_history.json"
+BANK_PLANS = {
+    "basic": {
+        "name": "Basic",
+        "min_deposit": 0,
+        "interest": 0.01,  # 1% daily interest
+        "description": "1% daily interest, no minimum balance",
+        "requirements": "No minimum"  # Add this
+    },
+    "premium": {
+        "name": "Premium",
+        "min_deposit": 5000,
+        "interest": 0.03,  # 3% daily interest
+        "description": "3% daily interest, requires 5,000 coin minimum",
+        "requirements": "5,000 coin minimum"  # Add this
+    },
+    "vip": {
+        "name": "VIP",
+        "min_deposit": 15000,
+        "interest": 0.05,  # 5% daily interest
+        "description": "5% daily interest, requires 15,000 coin minimum",
+        "requirements": "15,000 coin minimum"  # Add this
+    }
+}
 
 
 def load_balances():
@@ -163,28 +186,6 @@ def update_bank_data(user_id, data):
     bank_data = load_bank_data()
     bank_data[str(user_id)] = data
     save_bank_data(bank_data)
-
-# Bank plans with interest rates and minimum balances
-BANK_PLANS = {
-    "basic": {
-        "name": "Basic",
-        "min_deposit": 0,
-        "interest": 0.01,  # 1% daily interest
-        "description": "1% daily interest, no minimum balance"
-    },
-    "premium": {
-        "name": "Premium",
-        "min_deposit": 5000,
-        "interest": 0.03,  # 3% daily interest
-        "description": "3% daily interest, requires 5,000 coin minimum"
-    },
-    "vip": {
-        "name": "VIP",
-        "min_deposit": 15000,
-        "interest": 0.05,  # 5% daily interest
-        "description": "5% daily interest, requires 15,000 coin minimum"
-    }
-}
 
 # ------------------ DISCORD BOT SETUP ------------------
 
@@ -603,8 +604,7 @@ async def interest(ctx):
         total_interest += daily_interest
         principal += daily_interest  # Compounding effect
     
-    # AUTO-CLAIM: Add interest directly to balance
-    bank_data["balance"] += total_interest
+    # Update bank data
     bank_data["deposited"] = principal  # Update with compounded amount
     bank_data["last_interest_claim"] = current_time
     update_bank_data(user_id, bank_data)
@@ -613,57 +613,6 @@ async def interest(ctx):
         f"💰 **+{int(total_interest):,} coins** (Interest over {days_passed} day{'s' if days_passed > 1 else ''})\n"
         f"🏦 New deposited amount: **{int(principal):,} coins**"
     )
-
-class BankPlanSelect(discord.ui.Select):
-    def __init__(self, user_id):
-        self.user_id = user_id
-        options = [
-            discord.SelectOption(
-                label=plan['name'],
-                description=f"{plan['interest']*100}% daily | {plan['requirements']}",
-                value=plan_id
-            ) for plan_id, plan in BANK_PLANS.items()
-        ]
-        super().__init__(placeholder="Select a bank plan...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        bank_data = get_bank_data(self.user_id)
-        new_plan = self.values[0]
-        
-        # Check if user can afford the new plan's requirements
-        required_deposit = BANK_PLANS[new_plan]['min_deposit']
-        current_balance = get_balance(self.user_id)  # Check wallet balance
-        if current_balance < required_deposit:
-            return await interaction.response.send_message(
-                f"❌ You need at least {required_balance:,} coins to select this plan!",
-                ephemeral=True
-            )
-        
-        # If changing from existing plan
-        if bank_data["plan"] is not None:
-            # Withdraw all funds when changing plans
-            bank_data["balance"] += bank_data["deposited"]
-            bank_data["deposited"] = 0
-            bank_data["pending_interest"] = 0
-        
-        bank_data["plan"] = new_plan
-        bank_data["last_interest_claim"] = 0  # Reset interest timer
-        update_bank_data(self.user_id, bank_data)
-        
-        plan = BANK_PLANS[new_plan]
-        await interaction.response.send_message(
-            f"✅ Successfully changed to **{plan['name']}** plan!\n"
-            f"• Interest: {plan['interest']*100}% daily\n"
-            f"• Minimum balance: {plan.get('min_balance', 0):,} coins\n"
-            f"• {plan['description']}\n\n"
-            f"Deposit coins using `-deposit <amount>` to start earning interest!",
-            ephemeral=True
-        )
-
-class BankView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=60)
-        self.add_item(BankPlanSelect(user_id))
 
 @bot.command()
 async def bank(ctx):
@@ -698,13 +647,14 @@ async def bank(ctx):
     embed.add_field(
         name="Available Plans",
         value="\n".join(
-            f"• **{plan['name']}**: {plan['interest']*100}% daily (Min: {plan.get('min_balance', 0):,} coins)"
+            f"• **{plan['name']}**: {plan['interest']*100}% daily (Min: {plan['min_deposit']:,} coins)"
             for plan in BANK_PLANS.values()
         ),
         inline=False
     )
     
-    view = BankView(user_id) if not bank_data["plan"] or ctx.invoked_with.lower() == "change" else None
+    # Always show the view to allow changing plans
+    view = BankView(user_id)
     
     await ctx.send(
         embed=embed,
@@ -712,14 +662,7 @@ async def bank(ctx):
         content=f"{ctx.author.mention}, here's your bank information:"
     )
 
-def format_time_until(timestamp):
-    now = time.time()
-    if now > timestamp:
-        return "Available now!"
-    remaining = timestamp - now
-    hours = int(remaining // 3600)
-    minutes = int((remaining % 3600) // 60)
-    return f"{hours}h {minutes}m"
+
 # ------------------ SHOP COMMANDS ------------------
 
 def load_shop_items():
