@@ -14,6 +14,19 @@ from discord.ext.commands import cooldown, BucketType, CommandOnCooldown
 
 # ------------------ BALANCE MANAGEMENT ------------------
 
+def format_time_until(timestamp):
+    remaining = timestamp - time.time()
+    if remaining <= 0:
+        return "now"
+
+    hours = int(remaining // 3600)
+    minutes = int((remaining % 3600) // 60)
+
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
+
 BALANCE_FILE = "balances.json"
 BANK_FILE = "bank_data.json"
 LOANS_FILE = "loans.json"
@@ -645,11 +658,14 @@ async def interest(ctx):
         return await ctx.send(f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!")
     
     # Calculate how many full days passed since last claim
-    days_passed = int((current_time - last_claim) / 86400)  # full days passed
-    if days_passed == 0:
-        days_passed = 1  # set to 1 if no full day passed
-    
-    days_passed = min(30, days_passed)  # Max 30 days
+   # Calculate how many full days passed since last claim
+    if "last_interest_claim" not in bank_data:
+        days_passed = 1
+    else:
+        days_passed = min(30, int((current_time - last_claim) / 86400))
+        if days_passed < 1:
+            days_passed = 1
+
     
     # Calculate COMPOUNDED interest for all missed days
     interest_rate = BANK_PLANS[bank_data["plan"]]["interest"]
@@ -818,9 +834,6 @@ def remove_from_inventory(user_id, item_name, quantity=1):
     return True
 
 
-import discord
-from discord.ext import commands
-
 class QuantitySelect(discord.ui.Select):
     def __init__(self, item_id, max_stack, *args, **kwargs):
         options = [
@@ -940,13 +953,17 @@ class QuantitySelect(discord.ui.Select):
         options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_amount + 1)]
         super().__init__(placeholder="Select quantity", options=options, row=row, *args, **kwargs)
         self.item_id = item_id
-        self.selected_quantity = 1  # default selected quantity
+        self.selected_quantity = 1
 
     async def callback(self, interaction: discord.Interaction):
         self.selected_quantity = int(self.values[0])
-        # Store the selected quantity in the view keyed by item_id
         self.view.selected_quantities[self.item_id] = self.selected_quantity
-        await interaction.response.defer()
+        
+        # Give user feedback so interaction doesn't fail
+        await interaction.response.send_message(
+            f"✅ Selected quantity: {self.selected_quantity}",
+            ephemeral=True
+        )
 
 
 class UseItemView(discord.ui.View):
