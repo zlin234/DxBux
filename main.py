@@ -1578,7 +1578,7 @@ async def setall(ctx, *, data: str):
             user_id = parts[0].strip()
             wallet = int(parts[1].strip())
             plan = parts[2].strip()
-            deposited = int(parts[3].strip())
+            deposited = float(parts[3].strip())
             
             balances[user_id] = wallet
             bank_data[user_id] = {
