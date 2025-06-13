@@ -818,12 +818,12 @@ import discord
 from discord.ext import commands
 
 class QuantitySelect(discord.ui.Select):
-    def __init__(self, item_id, max_stack):
+    def __init__(self, item_id, max_stack, *args, **kwargs):
         options = [
             discord.SelectOption(label=str(i), value=str(i))
             for i in range(1, max_stack + 1)
         ]
-        super().__init__(placeholder="Quantity", options=options, row=0)
+        super().__init__(placeholder="Quantity", options=options, row=0, *args, **kwargs)
         self.item_id = item_id
         self.selected_quantity = 1
 
