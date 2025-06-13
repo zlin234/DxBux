@@ -956,7 +956,7 @@ class UseItemDropdown(discord.ui.Select):
 
         
 
-class QuantitySelect(discord.ui.Select):
+class UseQuantitySelect(discord.ui.Select):
     def __init__(self, max_amount, row=1):
         options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_amount + 1)]
         super().__init__(placeholder="Select quantity", options=options, row=row)
@@ -964,6 +964,7 @@ class QuantitySelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         self.view.selected_quantity = int(self.values[0])
         await interaction.response.send_message(f"✅ Quantity set to **{self.values[0]}**", ephemeral=True)
+
 
 
 
@@ -975,7 +976,7 @@ class UseItemView(discord.ui.View):
         self.selected_quantity = 1
 
         self.add_item(UseItemDropdown(user_id))
-        self.add_item(QuantitySelect(10))  # Default max selectable quantity
+        self.add_item(UseQuantitySelect(10))
 
     @discord.ui.button(label="Use Item", style=discord.ButtonStyle.green, row=2)
     async def use_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
