@@ -818,20 +818,20 @@ import discord
 from discord.ext import commands
 
 class QuantitySelect(discord.ui.Select):
-    def __init__(self, item_id, max_quantity):
+    def __init__(self, item_id, max_stack):
         options = [
-            discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_quantity + 1)
+            discord.SelectOption(label=str(i), value=str(i))
+            for i in range(1, max_stack + 1)
         ]
-        super().__init__(placeholder="Select quantity", min_values=1, max_values=1, options=options)
+        super().__init__(placeholder="Quantity", options=options, row=0)
         self.item_id = item_id
         self.selected_quantity = 1
 
     async def callback(self, interaction: discord.Interaction):
         self.selected_quantity = int(self.values[0])
-        await interaction.response.send_message(
-            f"Quantity for `{self.item_id}` set to **{self.selected_quantity}**.",
-            ephemeral=True
-        )
+        self.view.selected_quantities[self.item_id] = self.selected_quantity
+        await interaction.response.defer()
+
 
 class ShopItemRow(discord.ui.View):
     def __init__(self, user_id, item_id, item_data):
