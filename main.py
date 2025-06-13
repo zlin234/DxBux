@@ -849,7 +849,6 @@ class QuantitySelect(discord.ui.Select):
         self.view.selected_quantities[self.item_id] = self.selected_quantity
         await interaction.response.defer()
 
-
 class ShopItemRow(discord.ui.View):
     def __init__(self, user_id, item_id, item_data):
         super().__init__(timeout=None)
@@ -953,25 +952,19 @@ class UseItemDropdown(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         self.view.selected_item = self.values[0]
-        await interaction.response.defer()  # Wait for quantity + confirm
+        await interaction.response.send_message(f"✅ Selected **{self.values[0]}**", ephemeral=True)
+
         
 
 class QuantitySelect(discord.ui.Select):
-    def __init__(self, item_id, max_amount, row=1, *args, **kwargs):
+    def __init__(self, max_amount, row=1):
         options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_amount + 1)]
-        super().__init__(placeholder="Select quantity", options=options, row=row, *args, **kwargs)
-        self.item_id = item_id
-        self.selected_quantity = 1
+        super().__init__(placeholder="Select quantity", options=options, row=row)
 
     async def callback(self, interaction: discord.Interaction):
-        self.selected_quantity = int(self.values[0])
-        self.view.selected_quantities[self.item_id] = self.selected_quantity
-        
-        # Give user feedback so interaction doesn't fail
-        await interaction.response.send_message(
-            f"✅ Selected quantity: {self.selected_quantity}",
-            ephemeral=True
-        )
+        self.view.selected_quantity = int(self.values[0])
+        await interaction.response.send_message(f"✅ Quantity set to **{self.values[0]}**", ephemeral=True)
+
 
 
 class UseItemView(discord.ui.View):
@@ -981,13 +974,8 @@ class UseItemView(discord.ui.View):
         self.selected_item = None
         self.selected_quantity = 1
 
-        self.dropdown = UseItemDropdown(user_id)
-        self.add_item(self.dropdown)
-
-        self.quantity_select = QuantitySelect(10)
-        self.add_item(self.quantity_select)
-
-        self.add_item(discord.ui.Button(label="Use Item", style=discord.ButtonStyle.green, custom_id="use", row=2))
+        self.add_item(UseItemDropdown(user_id))
+        self.add_item(QuantitySelect(10))  # Default max selectable quantity
 
     @discord.ui.button(label="Use Item", style=discord.ButtonStyle.green, row=2)
     async def use_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1003,6 +991,8 @@ class UseItemView(discord.ui.View):
         user_inv = get_inventory(self.user_id)
         if item not in user_inv:
             return await interaction.response.send_message("❌ You don't have this item anymore.", ephemeral=True)
+
+        # --- PADLOCK HANDLING ---
         if item == "padlock":
             if user_inv[item] < quantity:
                 return await interaction.response.send_message(
@@ -1013,10 +1003,12 @@ class UseItemView(discord.ui.View):
             protection_data[str(self.user_id)] = current_protection + (5 * quantity)
             save_rob_protection(protection_data)
             remove_from_inventory(self.user_id, "padlock", quantity)
-            await interaction.response.send_message(
+            return await interaction.response.send_message(
                 f"🔒 You used {quantity} padlock(s), adding {5 * quantity} protections.\n"
                 f"🛡️ Total protections: **{protection_data[str(self.user_id)]}**", ephemeral=False
             )
+
+        # --- PHONE HANDLING ---
         elif item == "phone":
             if user_inv[item] < 1:
                 return await interaction.response.send_message("❌ You don't have a phone.", ephemeral=True)
@@ -1039,10 +1031,9 @@ class UseItemView(discord.ui.View):
                         arrests += 1
 
             if arrests > 0:
-                await interaction.response.send_message(f"🚨 You arrested {arrests} robber(s) and claimed fines!", ephemeral=False)
+                return await interaction.response.send_message(f"🚨 You arrested {arrests} robber(s) and claimed fines!", ephemeral=False)
             else:
-                await interaction.response.send_message("🚨 No recent robbers had robbed you.", ephemeral=False)
-
+                return await interaction.response.send_message("🚨 No recent robbers had robbed you.", ephemeral=False)
 
 @bot.command()
 async def use(ctx):
