@@ -406,7 +406,7 @@ async def tax(ctx, member: discord.Member):
 
     await ctx.send(
         f"🏛️ You taxed {member.mention} and they lost {taxed_amount} coins.\n"
-        f"You spent {tax_cost} to do it and gained it back."
+        f"You lost {tax_cost} to tax them."
     )
 
 
