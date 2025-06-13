@@ -382,9 +382,6 @@ async def rob(ctx, member: discord.Member):
     
 @bot.command()
 async def tax(ctx, member: discord.Member):
-    if not is_command_enabled("tax"):
-        return await ctx.send("🚫 This command is currently disabled by an admin.")
-    
     if member.id == ctx.author.id:
         return await ctx.send("❌ You can't tax yourself.")
 
