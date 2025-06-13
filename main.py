@@ -645,7 +645,11 @@ async def interest(ctx):
         return await ctx.send(f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!")
     
     # Calculate how many full days passed since last claim
-    days_passed = min(30, int((current_time - last_claim) / 86400))  # Max 30 days
+    days_passed = int((current_time - last_claim) / 86400)  # full days passed
+    if days_passed == 0:
+        days_passed = 1  # set to 1 if no full day passed
+    
+    days_passed = min(30, days_passed)  # Max 30 days
     
     # Calculate COMPOUNDED interest for all missed days
     interest_rate = BANK_PLANS[bank_data["plan"]]["interest"]
@@ -706,8 +710,8 @@ async def bank(ctx):
         inline=False
     )
     
-    # Use BankPlanView instead of BankView
-    view = BankPlanView(user_id) if not bank_data["plan"] or ctx.invoked_with.lower() == "change" else None
+    # Always show BankPlanView so user can select/change plans anytime
+    view = BankPlanView(user_id)
     
     await ctx.send(
         embed=embed,
