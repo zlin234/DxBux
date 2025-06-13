@@ -32,19 +32,18 @@ PLINKO_WIDTH = 13  # Should be odd number
 PLINKO_MULTIPLIERS = {
     0: 0.0,   # <- 0x
     1: 0.5,
-    2: 1.0,
-    3: 1.5,
-    4: 2.0,
-    5: 3.0,
-    6: 5.0,   # <- center, best payout
-    7: 3.0,
-    8: 2.0,
-    9: 1.5,
-    10: 1.0,
+    2: 0.5,
+    3: 1.0,
+    4: 1.0,
+    5: 1.5,
+    6: 2.0,   # <- center, best payout
+    7: 1.5,
+    8: 1.0,
+    9: 1.0,
+    10: 0.5,
     11: 0.5,
     12: 0.0   # <- 0x
 }
-TOGGLES_FILE = "command_toggles.json"
 
 
 def load_balances():
@@ -302,42 +301,6 @@ async def myloan(ctx):
     message += "\nUse `-repayloan` to repay your loan."
     await ctx.send(message)
 
-# TOGGLES
-
-
-def load_toggles():
-    try:
-        with open(TOGGLES_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-def save_toggles(data):
-    with open(TOGGLES_FILE, "w") as f:
-        json.dump(data, f)
-
-def is_command_enabled(command_name):
-    toggles = load_toggles()
-    return toggles.get(command_name, True)  # Enabled by default
-
-def toggle_command(command_name):
-    toggles = load_toggles()
-    toggles[command_name] = not toggles.get(command_name, True)
-    save_toggles(toggles)
-    return toggles[command_name]
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def toggle(ctx, command_name: str):
-    """Admin-only command to toggle any command on or off."""
-    command = bot.get_command(command_name)
-
-    if not command:
-        return await ctx.send("❌ That command doesn't exist.")
-
-    new_state = toggle_command(command_name)
-    state_str = "enabled ✅" if new_state else "disabled ❌"
-    await ctx.send(f"🔧 Command `{command_name}` is now {state_str}.")
 
 # ------------------ ALLOWANCE COMMANDS ------------------
 
@@ -375,9 +338,6 @@ async def allowance(ctx):
 @bot.command()
 @commands.cooldown(1, 60, BucketType.user)  # 1-minute cooldown
 async def rob(ctx, member: discord.Member):
-    if not is_command_enabled("rob"):
-        return await ctx.send("🚫 This command is currently disabled by an admin.")
-    
     if member.id == ctx.author.id:
         return await ctx.send("❌ You can't rob yourself.")
 
