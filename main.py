@@ -570,7 +570,7 @@ async def withdraw(ctx, amount: int):
 
 @bot.command()
 async def interest(ctx):
-    """Claim your daily interest from the bank"""
+    """Claim your accumulated interest (24h cooldown)"""
     user_id = ctx.author.id
     bank_data = get_bank_data(user_id)
     
@@ -581,12 +581,19 @@ async def interest(ctx):
         return await ctx.send("❌ You don't have any coins deposited to earn interest.")
     
     current_time = time.time()
-    last_claim = bank_data["last_interest_claim"]
+    last_claim = bank_data.get("last_interest_claim", 0)
     
-    # Calculate how many days have passed (minimum 1)
-    days_passed = max(1, int((current_time - last_claim) / 86400))  # 86400 seconds = 1 day
+    # Check if 24h cooldown has passed
+    if current_time - last_claim < 86400:
+        remaining = 86400 - (current_time - last_claim)
+        hours = int(remaining // 3600)
+        minutes = int((remaining % 3600) // 60)
+        return await ctx.send(f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!")
     
-    # Calculate interest for each day (compounding)
+    # Calculate how many full days passed since last claim
+    days_passed = min(30, int((current_time - last_claim) / 86400))  # Max 30 days
+    
+    # Calculate COMPOUNDED interest for all missed days
     interest_rate = BANK_PLANS[bank_data["plan"]]["interest"]
     principal = bank_data["deposited"]
     total_interest = 0
@@ -594,74 +601,125 @@ async def interest(ctx):
     for _ in range(days_passed):
         daily_interest = principal * interest_rate
         total_interest += daily_interest
-        principal += daily_interest
+        principal += daily_interest  # Compounding effect
     
-    # Add to pending interest
-    bank_data["pending_interest"] += total_interest
+    # AUTO-CLAIM: Add interest directly to balance
+    bank_data["balance"] += total_interest
+    bank_data["deposited"] = principal  # Update with compounded amount
     bank_data["last_interest_claim"] = current_time
     update_bank_data(user_id, bank_data)
     
     await ctx.send(
-        f"⏳ You've accumulated **{int(total_interest)} coins** in interest over {days_passed} day(s).\n"
-        f"Use `-claim` to add it to your bank balance!"
+        f"💰 **+{int(total_interest):,} coins** (Interest over {days_passed} day{'s' if days_passed > 1 else ''})\n"
+        f"🏦 New deposited amount: **{int(principal):,} coins**"
     )
 
-# Add this new command to claim the interest
-@bot.command()
-async def claim(ctx):
-    """Claim your accumulated interest"""
-    user_id = ctx.author.id
-    bank_data = get_bank_data(user_id)
-    
-    if bank_data["pending_interest"] <= 0:
-        return await ctx.send("❌ You don't have any pending interest to claim.")
-    
-    interest_to_add = bank_data["pending_interest"]
-    bank_data["deposited"] += interest_to_add
-    bank_data["pending_interest"] = 0
-    update_bank_data(user_id, bank_data)
-    
-    await ctx.send(
-        f"💰 Successfully claimed **{int(interest_to_add)} coins** in interest!\n"
-        f"Your new bank balance is **{bank_data['deposited']} coins**."
-    )
+class BankPlanSelect(discord.ui.Select):
+    def __init__(self, user_id):
+        self.user_id = user_id
+        options = [
+            discord.SelectOption(
+                label=plan['name'],
+                description=f"{plan['interest']*100}% daily | {plan['requirements']}",
+                value=plan_id
+            ) for plan_id, plan in BANK_PLANS.items()
+        ]
+        super().__init__(placeholder="Select a bank plan...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        bank_data = get_bank_data(self.user_id)
+        new_plan = self.values[0]
+        
+        # Check if user can afford the new plan's requirements
+        required_deposit = BANK_PLANS[new_plan]['min_deposit']
+        current_balance = get_balance(self.user_id)  # Check wallet balance
+        if current_balance < required_deposit:
+            return await interaction.response.send_message(
+                f"❌ You need at least {required_balance:,} coins to select this plan!",
+                ephemeral=True
+            )
+        
+        # If changing from existing plan
+        if bank_data["plan"] is not None:
+            # Withdraw all funds when changing plans
+            bank_data["balance"] += bank_data["deposited"]
+            bank_data["deposited"] = 0
+            bank_data["pending_interest"] = 0
+        
+        bank_data["plan"] = new_plan
+        bank_data["last_interest_claim"] = 0  # Reset interest timer
+        update_bank_data(self.user_id, bank_data)
+        
+        plan = BANK_PLANS[new_plan]
+        await interaction.response.send_message(
+            f"✅ Successfully changed to **{plan['name']}** plan!\n"
+            f"• Interest: {plan['interest']*100}% daily\n"
+            f"• Minimum balance: {plan.get('min_balance', 0):,} coins\n"
+            f"• {plan['description']}\n\n"
+            f"Deposit coins using `-deposit <amount>` to start earning interest!",
+            ephemeral=True
+        )
+
+class BankView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.add_item(BankPlanSelect(user_id))
 
 @bot.command()
 async def bank(ctx):
-    """View or change your bank plan"""
+    """Manage your bank account and select plans"""
     user_id = ctx.author.id
     bank_data = get_bank_data(user_id)
     
-    if bank_data["plan"] is None:
-        view = BankPlanView(user_id)
-        await ctx.send(
-            f"{ctx.author.mention}, you currently have no bank plan. Select one below:",
-            view=view
+    embed = discord.Embed(
+        title=f"{ctx.author.display_name}'s Bank Account",
+        color=discord.Color.blue()
+    )
+    
+    if bank_data["plan"]:
+        current_plan = BANK_PLANS[bank_data["plan"]]
+        embed.add_field(
+            name="Current Plan",
+            value=f"**{current_plan['name']}**\n{current_plan['description']}",
+            inline=False
+        )
+        embed.add_field(
+            name="Account Status",
+            value=(
+                f"• Deposited: {bank_data['deposited']:,} coins\n"
+                f"• Interest Rate: {current_plan['interest']*100}% daily\n"
+                f"• Next Interest: {format_time_until(bank_data['last_interest_claim'] + 86400)}"
+            ),
+            inline=False
         )
     else:
-        current_plan = BANK_PLANS[bank_data["plan"]]
-        message = (
-            f"{ctx.author.mention}, your current bank plan is **{current_plan['name']}**.\n"
-            f"• {current_plan['description']}\n"
-            f"• Deposited: {bank_data['deposited']} coins\n"
-        )
-        
-        if bank_data["pending_interest"] > 0:
-            message += f"• Pending interest: 🎁 {int(bank_data['pending_interest'])} coins (use `-claim`)\n"
-        
-        # Calculate time until next interest
-        if bank_data["last_interest_claim"] > 0:
-            next_interest = bank_data["last_interest_claim"] + 86400 - time.time()
-            if next_interest > 0:
-                hours = int(next_interest // 3600)
-                minutes = int((next_interest % 3600) // 60)
-                message += f"• Next interest in: ⏳ {hours}h {minutes}m\n"
-            else:
-                message += "• Interest available now! (use `-interest`)\n"
-        
-        message += "\nTo change your plan, use `-bank` again."
-        await ctx.send(message)
+        embed.description = "You don't have an active bank plan yet!"
+    
+    embed.add_field(
+        name="Available Plans",
+        value="\n".join(
+            f"• **{plan['name']}**: {plan['interest']*100}% daily (Min: {plan.get('min_balance', 0):,} coins)"
+            for plan in BANK_PLANS.values()
+        ),
+        inline=False
+    )
+    
+    view = BankView(user_id) if not bank_data["plan"] or ctx.invoked_with.lower() == "change" else None
+    
+    await ctx.send(
+        embed=embed,
+        view=view,
+        content=f"{ctx.author.mention}, here's your bank information:"
+    )
 
+def format_time_until(timestamp):
+    now = time.time()
+    if now > timestamp:
+        return "Available now!"
+    remaining = timestamp - now
+    hours = int(remaining // 3600)
+    minutes = int((remaining % 3600) // 60)
+    return f"{hours}h {minutes}m"
 # ------------------ SHOP COMMANDS ------------------
 
 def load_shop_items():
