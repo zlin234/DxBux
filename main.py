@@ -653,8 +653,8 @@ async def bank(ctx):
         inline=False
     )
     
-    # Always show the view to allow changing plans
-    view = BankView(user_id)
+    # Use BankPlanView instead of BankView
+    view = BankPlanView(user_id) if not bank_data["plan"] or ctx.invoked_with.lower() == "change" else None
     
     await ctx.send(
         embed=embed,
