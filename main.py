@@ -44,6 +44,10 @@ PLINKO_MULTIPLIERS = {
     11: 0.5,
     12: 0.0   # <- 0x
 }
+SHOP_ITEMS_FILE = "shop_items.json"
+INVENTORY_FILE = "inventories.json"
+ROB_PROTECTION_FILE = "rob_protection.json"
+ROB_HISTORY_FILE = "rob_history.json"
 
 
 def load_balances():
@@ -333,6 +337,10 @@ async def allowance(ctx):
             )
         else:
             await ctx.send("Something went wrong. Try again!")
+
+
+
+
 # RANDOM COMMANDS
 
 @bot.command()
@@ -341,17 +349,36 @@ async def rob(ctx, member: discord.Member):
     if member.id == ctx.author.id:
         return await ctx.send("❌ You can't rob yourself.")
 
+    # Check for protection
+    protection_data = load_rob_protection()
+    if str(member.id) in protection_data and protection_data[str(member.id)] > 0:
+        protection_data[str(member.id)] -= 1
+        save_rob_protection(protection_data)
+        return await ctx.send(
+            f"🔒 {member.mention} is protected by a padlock! Robbery attempt blocked. "
+            f"They have {protection_data[str(member.id)]} protections remaining."
+        )
+
     victim_balance = get_balance(member.id)
     robber_balance = get_balance(ctx.author.id)
 
     if victim_balance <= 0:
         return await ctx.send("❌ That user has nothing to steal.")
 
+    # Record robbery in history
+    rob_history = load_rob_history()
+    rob_history[str(ctx.author.id)] = {
+        "victim_id": member.id,
+        "timestamp": time.time()
+    }
+    save_rob_history(rob_history)
+
     stolen_amount = random.randint(1, int(victim_balance * 0.4))
     set_balance(member.id, victim_balance - stolen_amount)
     set_balance(ctx.author.id, robber_balance + stolen_amount)
 
     await ctx.send(f"💰 You robbed {member.mention} and stole {stolen_amount} coins!")
+
     
 @bot.command()
 async def tax(ctx, member: discord.Member):
@@ -637,6 +664,229 @@ async def bank(ctx):
         
         message += "\nTo change your plan, use `-bank` again."
         await ctx.send(message)
+
+# ------------------ SHOP COMMANDS ------------------
+
+def load_shop_items():
+    try:
+        with open(SHOP_ITEMS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        # Default shop items
+        default_items = {
+            "padlock": {
+                "name": "Padlock",
+                "price": 500,
+                "description": "Protects against 5 robbery attempts (stacks)",
+                "max_stack": 10
+            },
+            "phone": {
+                "name": "Phone",
+                "price": 1000,
+                "description": "Call police to arrest recent robbers (last 5 minutes)",
+                "max_stack": 1
+            }
+        }
+        save_shop_items(default_items)
+        return default_items
+
+def save_shop_items(shop_items):
+    with open(SHOP_ITEMS_FILE, "w") as f:
+        json.dump(shop_items, f)
+
+def load_inventories():
+    try:
+        with open(INVENTORY_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_inventories(inventories):
+    with open(INVENTORY_FILE, "w") as f:
+        json.dump(inventories, f)
+
+def load_rob_protection():
+    try:
+        with open(ROB_PROTECTION_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_rob_protection(protection_data):
+    with open(ROB_PROTECTION_FILE, "w") as f:
+        json.dump(protection_data, f)
+
+def load_rob_history():
+    try:
+        with open(ROB_HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+def save_rob_history(history_data):
+    with open(ROB_HISTORY_FILE, "w") as f:
+        json.dump(history_data, f)
+
+def get_inventory(user_id):
+    inventories = load_inventories()
+    return inventories.get(str(user_id), {})
+
+def add_to_inventory(user_id, item_name, quantity=1):
+    inventories = load_inventories()
+    user_inv = inventories.get(str(user_id), {})
+    
+    max_stack = load_shop_items().get(item_name, {}).get("max_stack", 1)
+    current_qty = user_inv.get(item_name, 0)
+    
+    if current_qty + quantity > max_stack:
+        return False  # Would exceed max stack
+    
+    user_inv[item_name] = current_qty + quantity
+    inventories[str(user_id)] = user_inv
+    save_inventories(inventories)
+    return True
+
+def remove_from_inventory(user_id, item_name, quantity=1):
+    inventories = load_inventories()
+    user_inv = inventories.get(str(user_id), {})
+    
+    current_qty = user_inv.get(item_name, 0)
+    if current_qty < quantity:
+        return False  # Not enough items
+    
+    user_inv[item_name] = current_qty - quantity
+    if user_inv[item_name] <= 0:
+        del user_inv[item_name]
+    
+    inventories[str(user_id)] = user_inv
+    save_inventories(inventories)
+    return True
+
+
+@bot.command()
+async def shop(ctx):
+    """View available items in the shop"""
+    shop_items = load_shop_items()
+    embed = discord.Embed(title="Shop", color=0x00FF00)
+    
+    for item_id, item_data in shop_items.items():
+        embed.add_field(
+            name=f"{item_data['name']} - {item_data['price']} coins",
+            value=f"{item_data['description']}\n"
+                  f"Use `-buy {item_id}` to purchase",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def buy(ctx, item_name: str, quantity: int = 1):
+    """Purchase an item from the shop"""
+    shop_items = load_shop_items()
+    user_id = ctx.author.id
+    
+    if item_name.lower() not in shop_items:
+        return await ctx.send(f"❌ Item '{item_name}' not found in shop. Use `-shop` to see available items.")
+    
+    item_data = shop_items[item_name.lower()]
+    price = item_data["price"] * quantity
+    balance = get_balance(user_id)
+    
+    if balance < price:
+        return await ctx.send(f"❌ You need {price} coins to buy {quantity}x {item_data['name']}, but only have {balance} coins.")
+    
+    # Check if user can hold more of this item
+    user_inv = get_inventory(user_id)
+    current_qty = user_inv.get(item_name.lower(), 0)
+    max_stack = item_data.get("max_stack", 1)
+    
+    if current_qty + quantity > max_stack:
+        return await ctx.send(f"❌ You can only have {max_stack} of {item_data['name']} (you have {current_qty}).")
+    
+    # Deduct coins and add to inventory
+    set_balance(user_id, balance - price)
+    add_to_inventory(user_id, item_name.lower(), quantity)
+    
+    await ctx.send(f"✅ Purchased {quantity}x {item_data['name']} for {price} coins!")
+
+@bot.command()
+async def inventory(ctx, member: discord.Member = None):
+    """View your or another user's inventory"""
+    target = member or ctx.author
+    user_inv = get_inventory(target.id)
+    shop_items = load_shop_items()
+    
+    if not user_inv:
+        return await ctx.send(f"{'You have' if target == ctx.author else f'{target.display_name} has'} no items.")
+    
+    embed = discord.Embed(title=f"{target.display_name}'s Inventory", color=0x7289DA)
+    
+    for item_name, quantity in user_inv.items():
+        item_data = shop_items.get(item_name, {"name": item_name.title(), "description": "No description available"})
+        embed.add_field(
+            name=f"{item_data['name']} x{quantity}",
+            value=item_data["description"],
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command()
+async def use(ctx, item_name: str, quantity: int = 1):
+    """Use an item from your inventory"""
+    user_id = ctx.author.id
+    user_inv = get_inventory(user_id)
+    
+    if item_name.lower() not in user_inv:
+        return await ctx.send(f"❌ You don't have any {item_name} in your inventory.")
+    
+    if user_inv[item_name.lower()] < quantity:
+        return await ctx.send(f"❌ You only have {user_inv[item_name.lower()]}x {item_name}, but tried to use {quantity}x.")
+    
+    # Handle specific item usage
+    if item_name.lower() == "padlock":
+        protection_data = load_rob_protection()
+        current_protection = protection_data.get(str(user_id), 0)
+        protection_data[str(user_id)] = current_protection + (5 * quantity)
+        save_rob_protection(protection_data)
+        
+        remove_from_inventory(user_id, item_name.lower(), quantity)
+        await ctx.send(f"🔒 You've added {5 * quantity} robbery protections! You'll be protected from the next {current_protection + (5 * quantity)} robbery attempts.")
+    
+    elif item_name.lower() == "phone":
+        # Check rob history for recent robberies
+        rob_history = load_rob_history()
+        recent_robbers = []
+        
+        for robber_id, rob_data in rob_history.items():
+            if time.time() - rob_data["timestamp"] <= 300:  # 5 minutes ago
+                recent_robbers.append((robber_id, rob_data["victim_id"]))
+        
+        if not recent_robbers:
+            return await ctx.send("❌ No recent robberies to report (last 5 minutes).")
+        
+        # Remove phone from inventory
+        remove_from_inventory(user_id, item_name.lower())
+        
+        # Process arrests
+        arrests_made = 0
+        for robber_id, victim_id in recent_robbers:
+            if str(victim_id) == str(user_id):  # Only arrest robbers who robbed you
+                robber_balance = get_balance(int(robber_id))
+                stolen_amount = min(robber_balance, 1000)  # Fine of up to 1000 coins
+                
+                if stolen_amount > 0:
+                    set_balance(int(robber_id), robber_balance - stolen_amount)
+                    set_balance(user_id, get_balance(user_id) + stolen_amount)
+                    arrests_made += 1
+        
+        if arrests_made > 0:
+            await ctx.send(f"🚨 You called the police! {arrests_made} robber(s) who recently robbed you have been arrested and fined!")
+        else:
+            await ctx.send("🚨 You called the police, but none of the recent robbers had robbed you.")
+    
+    else:
+        await ctx.send(f"❌ The {item_name} doesn't have a special use. It may be a passive item.")
 
 # ------------------ WHEEL/BLACKJACK ------------------
 
@@ -1125,14 +1375,15 @@ async def admin_setbal(ctx, member: discord.Member, amount: int):
 @bot.command()
 @is_admin()
 async def checkall(ctx):
-    """Export all user balances and bank data"""
+    """Export all user balances, bank data, and inventories"""
     balances = load_balances()
     bank_data = load_bank_data()
     loans = load_loans()
+    inventories = load_inventories()
     
     output = []
     # Combine user IDs from all files
-    all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys())
+    all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys()) | set(inventories.keys())
     
     for user_id in all_user_ids:
         wallet = balances.get(user_id, 1000)  # Default to 1000 if not found
@@ -1144,16 +1395,21 @@ async def checkall(ctx):
         loan_info = loans.get(user_id, {})
         has_loan = "Y" if loan_info and not loan_info.get("repaid", True) else "N"
         
+        # Inventory info
+        inv_info = inventories.get(user_id, {})
+        inv_str = ",".join(f"{k}:{v}" for k,v in inv_info.items()) if inv_info else "None"
+        
         # Use pipe (|) as delimiter
-        output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{has_loan}")
+        output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{has_loan}|{inv_str}")
     
     data = "\n".join(output)
     await ctx.send(f"```data\n{data}```")
 
+# Update the setall command to handle inventories
 @bot.command()
 @is_admin()
 async def setall(ctx, *, data: str):
-    """Import all user balances and bank data"""
+    """Import all user balances, bank data, and inventories"""
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
         if data.startswith('data\n'):
@@ -1163,13 +1419,14 @@ async def setall(ctx, *, data: str):
     balances = {}
     bank_data = {}
     loans = {}
+    inventories = {}
     
     for line in lines:
         if not line.strip():
             continue
             
         parts = line.split('|')
-        if len(parts) < 4:
+        if len(parts) < 5:
             continue
             
         try:
@@ -1193,14 +1450,27 @@ async def setall(ctx, *, data: str):
                     "created_at": datetime.now().timestamp(),
                     "repaid": False
                 }
+            
+            # Handle inventory if present
+            if len(parts) > 5 and parts[5].strip().lower() != "none":
+                inv_items = parts[5].strip().split(',')
+                user_inv = {}
+                for item_str in inv_items:
+                    if ':' in item_str:
+                        item_name, quantity = item_str.split(':')
+                        user_inv[item_name.strip().lower()] = int(quantity)
+                inventories[user_id] = user_inv
+            
         except ValueError:
             continue
     
     save_balances(balances)
     save_bank_data(bank_data)
     save_loans(loans)
+    save_inventories(inventories)
     
     await ctx.send(f"✅ Successfully imported data for {len(balances)} users!")
+
 
 # ------------------ GAME STUBS ------------------
 
