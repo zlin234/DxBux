@@ -1272,7 +1272,6 @@ class StockMarketView(discord.ui.View):
                 await interaction.response.send_message("An error occurred while processing your selection.", ephemeral=True)
 
     async def currency_select(self, interaction: discord.Interaction):
-    """Handle currency selection"""
     try:
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ This menu isn't for you!", ephemeral=True)
