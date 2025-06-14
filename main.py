@@ -1214,7 +1214,7 @@ class StockMarketView(discord.ui.View):
         
         self.amount_dropdown = discord.ui.Select(
             placeholder="Select Amount",
-            options=[discord.SelectOption(label="1", value="1")],  # Default option
+            options=[discord.SelectOption(label="1", value="1")],
             row=2,
             disabled=True
         )
@@ -1231,140 +1231,176 @@ class StockMarketView(discord.ui.View):
         self.confirm_button.callback = self.confirm_trade
         self.add_item(self.confirm_button)
 
+    async def on_timeout(self):
+        """Disable all components when view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.NotFound:
+                pass
+
     async def update_ui_state(self, interaction: discord.Interaction):
         """Update UI components based on current selections"""
-        self.currency_dropdown.disabled = self.action is None
-        self.amount_dropdown.disabled = self.currency is None
-        self.confirm_button.disabled = not (self.action and self.currency and self.amount)
-        
-        if interaction.response.is_done():
-            await interaction.followup.edit_message(self.message.id, view=self)
-        else:
-            await interaction.response.edit_message(view=self)
+        try:
+            self.currency_dropdown.disabled = self.action is None
+            self.amount_dropdown.disabled = self.currency is None
+            self.confirm_button.disabled = not (self.action and self.currency and self.amount)
+            
+            if interaction.response.is_done():
+                await interaction.followup.edit_message(self.message.id, view=self)
+            else:
+                await interaction.response.edit_message(view=self)
+        except Exception as e:
+            print(f"Error updating UI state: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("An error occurred while updating the view.", ephemeral=True)
 
     async def action_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-        
-        self.action = interaction.data['values'][0]
-        await self.update_ui_state(interaction)
-        await interaction.followup.send(f"Selected action: **{self.action.capitalize()}**", ephemeral=True)
+        try:
+            if interaction.user.id != self.user_id:
+                return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+            
+            await interaction.response.defer()
+            self.action = interaction.data['values'][0]
+            await self.update_ui_state(interaction)
+            await interaction.followup.send(f"Selected action: **{self.action.capitalize()}**", ephemeral=True)
+        except Exception as e:
+            print(f"Error in action_select: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("An error occurred while processing your selection.", ephemeral=True)
 
     async def currency_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-        
-        self.currency = interaction.data['values'][0]
-        
-        # Update amount options based on available funds/inventory
-        user_balance = get_balance(self.user_id)
-        user_inv = get_inventory(self.user_id)
-        prices = load_currency_prices()
-        
-        if self.action == "buy":
-            max_affordable = user_balance // prices[self.currency]
-        else:  # sell
-            max_affordable = user_inv.get(self.currency, 0)
-        
-        # Update amount dropdown
-        self.amount_dropdown.options = []
-        amounts = [1, 5, 10, 25, 50, 100]
-        
-        for amount in amounts:
-            if amount <= max_affordable:
+        try:
+            if interaction.user.id != self.user_id:
+                return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+            
+            await interaction.response.defer()
+            self.currency = interaction.data['values'][0]
+            
+            # Update amount options based on available funds/inventory
+            user_balance = get_balance(self.user_id)
+            user_inv = get_inventory(self.user_id)
+            prices = load_currency_prices()
+            
+            if self.action == "buy":
+                max_affordable = user_balance // prices[self.currency]
+            else:  # sell
+                max_affordable = user_inv.get(self.currency, 0)
+            
+            # Update amount dropdown
+            self.amount_dropdown.options = []
+            amounts = [1, 5, 10, 25, 50, 100]
+            
+            for amount in amounts:
+                if amount <= max_affordable:
+                    self.amount_dropdown.options.append(
+                        discord.SelectOption(label=str(amount), value=str(amount))
+            
+            if max_affordable > 0 and (max_affordable > 100 or max_affordable not in amounts):
                 self.amount_dropdown.options.append(
-                    discord.SelectOption(label=str(amount), value=str(amount))
+                    discord.SelectOption(label=f"Max ({max_affordable})", value="max")
                 )
-        
-        if max_affordable > 0 and (max_affordable > 100 or max_affordable not in amounts):
-            self.amount_dropdown.options.append(
-                discord.SelectOption(label=f"Max ({max_affordable})", value="max")
-            )
-        
-        if self.amount_dropdown.options:
-            self.amount = int(self.amount_dropdown.options[0].value)
-        else:
-            self.amount = 0
-        
-        await self.update_ui_state(interaction)
-        await interaction.followup.send(f"Selected currency: **{self.currency}**", ephemeral=True)
+            
+            if self.amount_dropdown.options:
+                self.amount = int(self.amount_dropdown.options[0].value)
+            else:
+                self.amount = 0
+            
+            await self.update_ui_state(interaction)
+            await interaction.followup.send(f"Selected currency: **{self.currency}**", ephemeral=True)
+        except Exception as e:
+            print(f"Error in currency_select: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("An error occurred while processing your selection.", ephemeral=True)
 
     async def amount_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-        
-        selected = interaction.data['values'][0]
-        if selected == "max":
+        try:
+            if interaction.user.id != self.user_id:
+                return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+            
+            await interaction.response.defer()
+            selected = interaction.data['values'][0]
+            if selected == "max":
+                prices = load_currency_prices()
+                user_balance = get_balance(self.user_id)
+                user_inv = get_inventory(self.user_id)
+                
+                if self.action == "buy":
+                    self.amount = user_balance // prices[self.currency]
+                else:  # sell
+                    self.amount = user_inv.get(self.currency, 0)
+            else:
+                self.amount = int(selected)
+            
+            await self.update_ui_state(interaction)
+            await interaction.followup.send(f"Selected amount: **{self.amount}**", ephemeral=True)
+        except Exception as e:
+            print(f"Error in amount_select: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message("An error occurred while processing your selection.", ephemeral=True)
+
+    async def confirm_trade(self, interaction: discord.Interaction):
+        try:
+            if interaction.user.id != self.user_id:
+                return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+            
+            await interaction.response.defer()
             prices = load_currency_prices()
             user_balance = get_balance(self.user_id)
             user_inv = get_inventory(self.user_id)
             
             if self.action == "buy":
-                self.amount = user_balance // prices[self.currency]
-            else:  # sell
-                self.amount = user_inv.get(self.currency, 0)
-        else:
-            self.amount = int(selected)
-        
-        await self.update_ui_state(interaction)
-        await interaction.followup.send(f"Selected amount: **{self.amount}**", ephemeral=True)
-
-    async def confirm_trade(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-        
-        prices = load_currency_prices()
-        user_balance = get_balance(self.user_id)
-        user_inv = get_inventory(self.user_id)
-        
-        if self.action == "buy":
-            total_cost = prices[self.currency] * self.amount
-            if user_balance < total_cost:
-                return await interaction.response.send_message(
-                    f"❌ You need {total_cost} coins but only have {user_balance}!",
-                    ephemeral=True
+                total_cost = prices[self.currency] * self.amount
+                if user_balance < total_cost:
+                    return await interaction.followup.send(
+                        f"❌ You need {total_cost} coins but only have {user_balance}!",
+                        ephemeral=True
+                    )
+                
+                # Execute buy
+                set_balance(self.user_id, user_balance - total_cost)
+                add_to_inventory(self.user_id, self.currency, self.amount)
+                new_price = update_currency_price(self.currency, self.amount)
+                
+                await interaction.followup.send(
+                    f"✅ Purchased {self.amount} {self.currency} for {total_cost} coins!\n"
+                    f"• New price: {new_price} coins\n"
+                    f"• Your balance: {user_balance - total_cost} coins\n"
+                    f"• Now own: {user_inv.get(self.currency, 0) + self.amount} {self.currency}"
                 )
             
-            # Execute buy
-            set_balance(self.user_id, user_balance - total_cost)
-            add_to_inventory(self.user_id, self.currency, self.amount)
-            new_price = update_currency_price(self.currency, self.amount)
-            
-            await interaction.response.send_message(
-                f"✅ Purchased {self.amount} {self.currency} for {total_cost} coins!\n"
-                f"• New price: {new_price} coins\n"
-                f"• Your balance: {user_balance - total_cost} coins\n"
-                f"• Now own: {user_inv.get(self.currency, 0) + self.amount} {self.currency}"
-            )
-        
-        elif self.action == "sell":
-            current_owned = user_inv.get(self.currency, 0)
-            if current_owned < self.amount:
-                return await interaction.response.send_message(
-                    f"❌ You only have {current_owned} {self.currency}!",
-                    ephemeral=True
+            elif self.action == "sell":
+                current_owned = user_inv.get(self.currency, 0)
+                if current_owned < self.amount:
+                    return await interaction.followup.send(
+                        f"❌ You only have {current_owned} {self.currency}!",
+                        ephemeral=True
+                    )
+                
+                sell_price = int(prices[self.currency] * 0.9)  # 10% market fee
+                total_earned = sell_price * self.amount
+                
+                # Execute sell
+                set_balance(self.user_id, user_balance + total_earned)
+                remove_from_inventory(self.user_id, self.currency, self.amount)
+                update_currency_price(self.currency, -self.amount)  # Negative amount for selling
+                
+                await interaction.followup.send(
+                    f"✅ Sold {self.amount} {self.currency} for {total_earned} coins!\n"
+                    f"• Current price: {prices[self.currency]} coins\n"
+                    f"• Your balance: {user_balance + total_earned} coins\n"
+                    f"• Remaining: {current_owned - self.amount} {self.currency}"
                 )
             
-            sell_price = int(prices[self.currency] * 0.9)  # 10% market fee
-            total_earned = sell_price * self.amount
-            
-            # Execute sell
-            set_balance(self.user_id, user_balance + total_earned)
-            remove_from_inventory(self.user_id, self.currency, self.amount)
-            update_currency_price(self.currency, -self.amount)  # Negative amount for selling
-            
-            await interaction.response.send_message(
-                f"✅ Sold {self.amount} {self.currency} for {total_earned} coins!\n"
-                f"• Current price: {prices[self.currency]} coins\n"
-                f"• Your balance: {user_balance + total_earned} coins\n"
-                f"• Remaining: {current_owned - self.amount} {self.currency}"
-            )
-        
-        # Disable all components after trade
-        for item in self.children:
-            item.disabled = True
-        await interaction.message.edit(view=self)
-
+            # Disable all components after trade
+            for item in self.children:
+                item.disabled = True
+            await interaction.message.edit(view=self)
+        except Exception as e:
+            print(f"Error in confirm_trade: {e}")
+            await interaction.followup.send("An error occurred while processing your trade.", ephemeral=True)
 
 # ------------------ WHEEL/BLACKJACK ------------------
 
