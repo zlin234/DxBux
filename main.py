@@ -31,6 +31,12 @@ BALANCE_FILE = "balances.json"
 BANK_FILE = "bank_data.json"
 LOANS_FILE = "loans.json"
 ALLOWANCE_FILE = "allowance.json"
+SHOP_ITEMS_FILE = "shop_items.json"
+INVENTORY_FILE = "inventories.json"
+ROB_PROTECTION_FILE = "rob_protection.json"
+ROB_HISTORY_FILE = "rob_history.json"
+CURRENCY_STOCKS_FILE = "currency_stocks.json"
+CURRENCY_PRICES_FILE = "currency_prices.json"
 WHEEL_SECTIONS = [
     {"name": "100x", "multiplier": 100, "color": 0xFF0000, "weight": 2},  # ~2.5%
     {"name": "10x", "multiplier": 10, "color": 0x00FF00, "weight": 8},    # ~10%
@@ -57,10 +63,6 @@ PLINKO_MULTIPLIERS = {
     11: 0.5,
     12: 0.0   # <- 0x
 }
-SHOP_ITEMS_FILE = "shop_items.json"
-INVENTORY_FILE = "inventories.json"
-ROB_PROTECTION_FILE = "rob_protection.json"
-ROB_HISTORY_FILE = "rob_history.json"
 BANK_PLANS = {
     "basic": {
         "name": "Basic",
@@ -105,6 +107,71 @@ def set_balance(user_id, amount):
     balances = load_balances()
     balances[str(user_id)] = amount
     save_balances(balances)
+
+# ------------------ STOCK MANAGEMENT ------------------
+
+def load_currency_stocks():
+    try:
+        with open(CURRENCY_STOCKS_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        stocks = {"BobBux": 10000, "DxBux": 10000, "Gold": 10000}
+        save_currency_stocks(stocks)
+        return stocks
+
+def save_currency_stocks(stocks):
+    with open(CURRENCY_STOCKS_FILE, "w") as f:
+        json.dump(stocks, f)
+
+def load_currency_prices():
+    try:
+        with open(CURRENCY_PRICES_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        prices = {"BobBux": 500, "DxBux": 750, "Gold": 1000}
+        save_currency_prices(prices)
+        return prices
+
+def save_currency_prices(prices):
+    with open(CURRENCY_PRICES_FILE, "w") as f:
+        json.dump(prices, f)
+
+def update_currency_price(currency_name, amount_purchased):
+    prices = load_currency_prices()
+    stocks = load_currency_stocks()
+    
+    price_increase_percent = (amount_purchased / stocks[currency_name]) * 100
+    price_increase = prices[currency_name] * (price_increase_percent / 100)
+    prices[currency_name] = int(prices[currency_name] + max(price_increase, prices[currency_name] * 0.01))
+    save_currency_prices(prices)
+    
+    stocks[currency_name] -= amount_purchased
+    save_currency_stocks(stocks)
+    return prices[currency_name]
+
+def load_inventories():
+    try:
+        with open(INVENTORY_FILE, "r") as f:
+            inventories = json.load(f)
+    except FileNotFoundError:
+        inventories = {}
+    
+    for user_id, inv in inventories.items():
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            if currency not in inv:
+                inv[currency] = 0
+                
+    return inventories
+
+def get_inventory(user_id):
+    inventories = load_inventories()
+    user_inv = inventories.get(str(user_id), {})
+    
+    for currency in ["BobBux", "DxBux", "Gold"]:
+        if currency not in user_inv:
+            user_inv[currency] = 0
+    
+    return user_inv
 
 # ------------------ LOAN MANAGEMENT ------------------
 
@@ -768,9 +835,16 @@ def save_shop_items(shop_items):
 def load_inventories():
     try:
         with open(INVENTORY_FILE, "r") as f:
-            return json.load(f)
+            inventories = json.load(f)
     except FileNotFoundError:
-        return {}
+        inventories = {}
+    
+    for user_id, inv in inventories.items():
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            if currency not in inv:
+                inv[currency] = 0
+                
+    return inventories
 
 def save_inventories(inventories):
     with open(INVENTORY_FILE, "w") as f:
@@ -800,7 +874,13 @@ def save_rob_history(history_data):
 
 def get_inventory(user_id):
     inventories = load_inventories()
-    return inventories.get(str(user_id), {})
+    user_inv = inventories.get(str(user_id), {})
+    
+    for currency in ["BobBux", "DxBux", "Gold"]:
+        if currency not in user_inv:
+            user_inv[currency] = 0
+    
+    return user_inv
 
 def add_to_inventory(user_id, item_name, quantity=1):
     inventories = load_inventories()
@@ -1052,6 +1132,143 @@ async def use(ctx):
         color=discord.Color.blurple()
     )
     await ctx.send(embed=embed, view=view)
+
+
+
+# --------------------STOCK----------------------
+
+class StockMarketView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.action = None
+        self.currency = None
+        self.amount = 1
+        self.message = None
+        
+    async def update_message(self, interaction: discord.Interaction = None):
+        prices = load_currency_prices()
+        stocks = load_currency_stocks()
+        user_balance = get_balance(self.user_id)
+        user_inv = get_inventory(self.user_id)
+        
+        embed = discord.Embed(title="📈 Stock Market", color=discord.Color.gold())
+        
+        # Show current selections at the top
+        if self.action and self.currency:
+            embed.description = (
+                f"**Selected Action:** {self.action.upper()}\n"
+                f"**Selected Currency:** {self.currency}\n"
+                f"**Selected Amount:** {self.amount}\n\n"
+                f"Current Price: {prices[self.currency]} coins"
+            )
+        
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            price_change = ""
+            # You might want to track previous prices to show % changes
+            embed.add_field(
+                name=f"{currency}",
+                value=(
+                    f"Price: {prices[currency]} coins\n"
+                    f"Stock: {stocks[currency]}\n"
+                    f"You own: {user_inv.get(currency, 0)}\n"
+                    f"{price_change}"
+                ),
+                inline=True
+            )
+        
+        embed.set_footer(text=f"Your balance: {user_balance} coins")
+        
+        if interaction and interaction.response.is_done():
+            await interaction.followup.edit_message(self.message.id, embed=embed, view=self)
+        elif interaction:
+            await interaction.response.edit_message(embed=embed, view=self)
+        elif self.message:
+            await self.message.edit(embed=embed, view=self)
+
+    @discord.ui.select(
+        placeholder="Select Action (Buy/Sell)",
+        options=[discord.SelectOption(label="Buy", value="buy"), discord.SelectOption(label="Sell", value="sell")],
+        row=0
+    )
+    async def action_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        self.action = select.values[0]
+        await self.update_message(interaction)
+        # Send confirmation of selection
+        await interaction.followup.send(f"You selected to **{self.action}**", ephemeral=True)
+    
+    @discord.ui.select(
+        placeholder="Select Currency",
+        options=[
+            discord.SelectOption(label="BobBux", value="BobBux", description="Volatile market"), 
+            discord.SelectOption(label="DxBux", value="DxBux", description="Stable growth"),
+            discord.SelectOption(label="Gold", value="Gold", description="Premium currency")
+        ],
+        row=1
+    )
+    async def currency_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        self.currency = select.values[0]
+        await self.update_message(interaction)
+        # Send confirmation of selection
+        await interaction.followup.send(f"You selected **{self.currency}**", ephemeral=True)
+    
+    @discord.ui.select(
+        placeholder="Select Amount",
+        options=[discord.SelectOption(label=str(i), value=str(i)) for i in [1, 5, 10, 25, 50, 100, "Max"]],
+        row=2
+    )
+    async def amount_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        
+        selected = select.values[0]
+        if selected == "Max":
+            prices = load_currency_prices()
+            user_balance = get_balance(self.user_id)
+            user_inv = get_inventory(self.user_id)
+            
+            if self.action == "buy":
+                max_possible = min(
+                    user_balance // prices[self.currency],
+                    load_currency_stocks()[self.currency]
+                )
+            else:  # sell
+                max_possible = user_inv.get(self.currency, 0)
+            
+            self.amount = max_possible if max_possible > 0 else 1
+        else:
+            self.amount = int(selected)
+            
+        await self.update_message(interaction)
+        # Send confirmation of selection
+        await interaction.followup.send(f"Amount set to **{self.amount}**", ephemeral=True)
+
+@bot.command()
+async def stock(ctx):
+    """Open the stock market interface"""
+    view = StockMarketView(ctx.author.id)
+    embed = discord.Embed(
+        title="📈 Stock Market",
+        description="Select an action, currency, and amount to trade",
+        color=discord.Color.gold()
+    )
+    
+    prices = load_currency_prices()
+    stocks = load_currency_stocks()
+    
+    for currency in ["BobBux", "DxBux", "Gold"]:
+        embed.add_field(
+            name=f"{currency}",
+            value=f"Price: {prices[currency]} coins\nStock: {stocks[currency]}",
+            inline=True
+        )
+    
+    embed.set_footer(text=f"Your balance: {get_balance(ctx.author.id)} coins")
+    view.message = await ctx.send(embed=embed, view=view)
 
 
 # ------------------ WHEEL/BLACKJACK ------------------
@@ -1517,6 +1734,72 @@ async def bal(ctx, member: discord.Member = None):
         f"{loan_info}"
     )
 
+@bot.command(aliases=["lb"])
+async def leaderboard(ctx, type: str = "wallet"):
+    """Show the wealth leaderboard (wallet, bank, or total)"""
+    valid_types = ["wallet", "bank", "total"]
+    if type.lower() not in valid_types:
+        return await ctx.send(f"❌ Invalid type. Use: {', '.join(valid_types)}")
+
+    balances = load_balances()
+    bank_data = load_bank_data()
+
+    # Prepare leaderboard data
+    lb_data = []
+    for user_id, balance in balances.items():
+        bank_amount = bank_data.get(user_id, {}).get("deposited", 0)
+        if type == "wallet":
+            amount = balance
+        elif type == "bank":
+            amount = bank_amount
+        else:  # total
+            amount = balance + bank_amount
+
+        # Try to get member name
+        try:
+            member = await ctx.guild.fetch_member(int(user_id))
+            name = member.display_name
+        except:
+            name = f"User {user_id}"
+
+        lb_data.append((name, amount))
+
+    # Sort and get top 10
+    lb_data.sort(key=lambda x: x[1], reverse=True)
+    top_10 = lb_data[:10]
+
+    # Create embed
+    embed = discord.Embed(
+        title=f"🏆 {type.capitalize()} Balance Leaderboard",
+        color=discord.Color.gold()
+    )
+
+    for i, (name, amount) in enumerate(top_10, 1):
+        embed.add_field(
+            name=f"{i}. {name}",
+            value=f"{amount:,} coins",
+            inline=False
+        )
+
+    # Add current user's position if not in top 10
+    current_user_id = str(ctx.author.id)
+    if current_user_id in balances:
+        current_pos = next(
+            (i+1 for i, (uid, _) in enumerate(lb_data) if uid == ctx.author.display_name),
+            len(lb_data)
+        current_amount = next(
+            (amt for uid, amt in lb_data if uid == ctx.author.display_name),
+            0)
+        
+        if current_pos > 10:
+            embed.add_field(
+                name=f"Your Position: #{current_pos}",
+                value=f"{current_amount:,} coins",
+                inline=False
+            )
+
+    await ctx.send(embed=embed)
+
 # ------------------ ADMIN CHECK DECORATOR ------------------
 
 def is_admin():
@@ -1541,114 +1824,145 @@ async def admin_setbal(ctx, member: discord.Member, amount: int):
 @bot.command()
 @is_admin()
 async def checkall(ctx):
-    """Export all user balances, bank data, and inventories"""
+    """Export all user data including currencies"""
     balances = load_balances()
     bank_data = load_bank_data()
     loans = load_loans()
     inventories = load_inventories()
+    currency_prices = load_currency_prices()
+    currency_stocks = load_currency_stocks()
     
-    output = []
-    # Combine user IDs from all files
+    output = ["=== MARKET DATA ==="]
+    for currency in ["BobBux", "DxBux", "Gold"]:
+        output.append(f"MARKET|{currency}|{currency_prices[currency]}|{currency_stocks[currency]}")
+    
+    output.append("\n=== USER DATA ===")
     all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys()) | set(inventories.keys())
     
     for user_id in all_user_ids:
-        wallet = balances.get(user_id, 1000)  # Default to 1000 if not found
+        wallet = balances.get(user_id, 1000)
         b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
         plan = b_data["plan"] or "None"
         deposited = b_data["deposited"]
         
-        # Loan info
         loan_info = loans.get(user_id, {})
         has_loan = "Y" if loan_info and not loan_info.get("repaid", True) else "N"
         
-        # Inventory info
         inv_info = inventories.get(user_id, {})
         inv_str = ",".join(f"{k}:{v}" for k,v in inv_info.items()) if inv_info else "None"
         
-        # Use pipe (|) as delimiter
         output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{has_loan}|{inv_str}")
     
-    data = "\n".join(output)
-    await ctx.send(f"```data\n{data}```")
+    # Split into chunks if too long
+    chunk_size = 1900
+    chunks = []
+    current_chunk = ""
+    
+    for line in output:
+        if len(current_chunk) + len(line) + 1 > chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = line
+        else:
+            current_chunk += "\n" + line if current_chunk else line
+    
+    if current_chunk:
+        chunks.append(current_chunk)
+    
+    for chunk in chunks:
+        await ctx.send(f"```{chunk}```")
 
-# Update the setall command to handle inventories
 @bot.command()
 @is_admin()
 async def setall(ctx, *, data: str):
-    """Import all user balances, bank data, and inventories"""
+    """Import all user data including currencies"""
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
-        if data.startswith('data\n'):
-            data = data[5:]
     
     lines = data.split('\n')
     balances = {}
     bank_data = {}
     loans = {}
     inventories = {}
+    currency_prices = load_currency_prices()
+    currency_stocks = load_currency_stocks()
+    
+    current_section = None
     
     for line in lines:
-        if not line.strip():
+        line = line.strip()
+        if not line:
             continue
-            
-        parts = line.split('|')
-        if len(parts) < 5:
+        
+        if line == "=== MARKET DATA ===":
+            current_section = "market"
             continue
-            
-        try:
-            user_id = parts[0].strip()
-            wallet = int(parts[1].strip())
-            plan = parts[2].strip()
-            deposited = float(parts[3].strip())
-            
-            balances[user_id] = wallet
-            bank_data[user_id] = {
-                "plan": None if plan.lower() == "none" else plan,
-                "deposited": deposited
-            }
-            
-            # Handle loan data if present
-            if len(parts) > 4 and parts[4].strip().upper() == "Y":
-                loans[user_id] = {
-                    "amount": 1000,  # Default loan amount
-                    "interest_rate": 0.1,
-                    "due_date": (datetime.now() + timedelta(days=7)).timestamp(),
-                    "created_at": datetime.now().timestamp(),
-                    "repaid": False
-                }
-            
-            # Handle inventory if present
-            if len(parts) > 5 and parts[5].strip().lower() != "none":
-                inv_items = parts[5].strip().split(',')
-                user_inv = {}
-                for item_str in inv_items:
-                    if ':' in item_str:
-                        item_name, quantity = item_str.split(':')
-                        user_inv[item_name.strip().lower()] = int(quantity)
-                inventories[user_id] = user_inv
-            
-        except ValueError:
+        elif line == "=== USER DATA ===":
+            current_section = "user"
             continue
+        
+        if current_section == "market":
+            if line.startswith("MARKET|"):
+                parts = line.split('|')
+                if len(parts) == 4:
+                    currency = parts[1]
+                    try:
+                        currency_prices[currency] = int(parts[2])
+                        currency_stocks[currency] = int(parts[3])
+                    except (ValueError, KeyError):
+                        continue
+        
+        elif current_section == "user":
+            parts = line.split('|')
+            if len(parts) >= 5:
+                try:
+                    user_id = parts[0].strip()
+                    wallet = int(parts[1].strip())
+                    plan = parts[2].strip()
+                    deposited = float(parts[3].strip())
+                    
+                    balances[user_id] = wallet
+                    bank_data[user_id] = {
+                        "plan": None if plan.lower() == "none" else plan,
+                        "deposited": deposited
+                    }
+                    
+                    if len(parts) > 4 and parts[4].strip().upper() == "Y":
+                        loans[user_id] = {
+                            "amount": 1000,
+                            "interest_rate": 0.1,
+                            "due_date": (datetime.now() + timedelta(days=7)).timestamp(),
+                            "created_at": datetime.now().timestamp(),
+                            "repaid": False
+                        }
+                    
+                    if len(parts) > 5 and parts[5].strip().lower() != "none":
+                        inv_items = parts[5].strip().split(',')
+                        user_inv = {}
+                        for item_str in inv_items:
+                            if ':' in item_str:
+                                item_name, quantity = item_str.split(':')
+                                try:
+                                    user_inv[item_name.strip()] = int(quantity)
+                                except ValueError:
+                                    continue
+                        inventories[user_id] = user_inv
+                
+                except ValueError:
+                    continue
     
     save_balances(balances)
     save_bank_data(bank_data)
     save_loans(loans)
     save_inventories(inventories)
+    save_currency_prices(currency_prices)
+    save_currency_stocks(currency_stocks)
     
-    await ctx.send(f"✅ Successfully imported data for {len(balances)} users!")
-
-
-# ------------------ GAME STUBS ------------------
-
-@bot.command()
-async def minesweeper(ctx, amount: int):
-    user_id = ctx.author.id
-    current_balance = get_balance(user_id)
-    if amount <= 0:
-        return await ctx.send("❌ Bet must be more than 0.")
-    if current_balance < amount:
-        return await ctx.send("❌ You don't have enough balance.")
-    await ctx.send(f"Minesweeper is not implemented yet, but you tried to bet {amount} coins!")
+    await ctx.send(
+        f"✅ Successfully imported:\n"
+        f"- {len(balances)} user balances\n"
+        f"- {len(inventories)} inventories\n"
+        f"- Market data for 3 currencies"
+    )
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
 
