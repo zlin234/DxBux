@@ -151,29 +151,6 @@ def update_currency_price(currency_name, amount_purchased=0):
     save_currency_prices(prices)
     return prices[currency_name]
 
-def load_inventories():
-    try:
-        with open(INVENTORY_FILE, "r") as f:
-            inventories = json.load(f)
-    except FileNotFoundError:
-        inventories = {}
-    
-    for user_id, inv in inventories.items():
-        for currency in ["BobBux", "DxBux", "Gold"]:
-            if currency not in inv:
-                inv[currency] = 0
-                
-    return inventories
-
-def get_inventory(user_id):
-    inventories = load_inventories()
-    user_inv = inventories.get(str(user_id), {})
-    
-    for currency in ["BobBux", "DxBux", "Gold"]:
-        if currency not in user_inv:
-            user_inv[currency] = 0
-    
-    return user_inv
 
 # ------------------ LOAN MANAGEMENT ------------------
 
@@ -810,25 +787,32 @@ async def bank(ctx):
 def load_shop_items():
     try:
         with open(SHOP_ITEMS_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        # Default shop items
-        default_items = {
+            shop_items = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        shop_items = {
             "padlock": {
                 "name": "Padlock",
                 "price": 500,
                 "description": "Protects against 5 robbery attempts (stacks)",
-                "max_stack": 10
+                "max_stack": 10,
+                "usable": True
             },
             "phone": {
                 "name": "Phone",
                 "price": 1000,
                 "description": "Call police to arrest recent robbers (last 5 minutes)",
-                "max_stack": 1
+                "max_stack": 1,
+                "usable": True
             }
         }
-        save_shop_items(default_items)
-        return default_items
+        save_shop_items(shop_items)
+    
+    # Ensure all items have required fields
+    for item_id, item_data in shop_items.items():
+        item_data.setdefault("usable", False)
+        item_data.setdefault("max_stack", 1)
+    
+    return shop_items
 
 def save_shop_items(shop_items):
     with open(SHOP_ITEMS_FILE, "w") as f:
@@ -837,68 +821,63 @@ def save_shop_items(shop_items):
 def load_inventories():
     try:
         with open(INVENTORY_FILE, "r") as f:
-            inventories = json.load(f)
-    except FileNotFoundError:
-        inventories = {}
-    
-    for user_id, inv in inventories.items():
-        for currency in ["BobBux", "DxBux", "Gold"]:
-            if currency not in inv:
-                inv[currency] = 0
-                
-    return inventories
-
-def save_inventories(inventories):
-    with open(INVENTORY_FILE, "w") as f:
-        json.dump(inventories, f)
-
-def load_rob_protection():
-    try:
-        with open(ROB_PROTECTION_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
+            data = json.load(f)
+            # Convert old format to new format if needed
+            inventories = {}
+            shop_items = load_shop_items().keys()
+            
+            for user_id, items in data.items():
+                if isinstance(items, list):  # Old format
+                    new_items = {}
+                    for item in items:
+                        if isinstance(item, dict) and "name" in item:
+                            new_items[item["name"]] = item.get("quantity", 1)
+                        elif isinstance(item, str):
+                            new_items[item] = new_items.get(item, 0) + 1
+                    inventories[user_id] = new_items
+                else:
+                    inventories[user_id] = items
+                    
+                # Ensure all shop items exist
+                for item_id in shop_items:
+                    if item_id not in inventories[user_id]:
+                        inventories[user_id][item_id] = 0
+                        
+            return inventories
+    except (FileNotFoundError, json.JSONDecodeError):
         return {}
-
-def save_rob_protection(protection_data):
-    with open(ROB_PROTECTION_FILE, "w") as f:
-        json.dump(protection_data, f)
-
-def load_rob_history():
-    try:
-        with open(ROB_HISTORY_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-
-def save_rob_history(history_data):
-    with open(ROB_HISTORY_FILE, "w") as f:
-        json.dump(history_data, f)
 
 def get_inventory(user_id):
     inventories = load_inventories()
-    user_inv = inventories.get(str(user_id), {})
+    user_inv = inventories.setdefault(str(user_id), {})
     
+    # Initialize all possible items
     for currency in ["BobBux", "DxBux", "Gold"]:
         if currency not in user_inv:
             user_inv[currency] = 0
+            
+    for item_id in load_shop_items().keys():
+        if item_id not in user_inv:
+            user_inv[item_id] = 0
     
     return user_inv
 
 def add_to_inventory(user_id, item_name, quantity=1):
     inventories = load_inventories()
-    user_inv = inventories.get(str(user_id), {})
+    user_inv = inventories.setdefault(str(user_id), {})
     
-    # Remove max_stack check for currencies
-    if item_name in ["BobBux", "DxBux", "Gold"]:
-        user_inv[item_name] = user_inv.get(item_name, 0) + quantity
-    else:
-        # Keep existing logic for other items
-        max_stack = load_shop_items().get(item_name, {}).get("max_stack", 1)
-        current_qty = user_inv.get(item_name, 0)
-        if current_qty + quantity > max_stack:
+    # Initialize if doesn't exist
+    if item_name not in user_inv:
+        user_inv[item_name] = 0
+        
+    # Check max stack for non-currency items
+    if item_name not in ["BobBux", "DxBux", "Gold"]:
+        shop_items = load_shop_items()
+        max_stack = shop_items.get(item_name, {}).get("max_stack", 1)
+        if user_inv[item_name] + quantity > max_stack:
             return False
     
-    inventories[str(user_id)] = user_inv
+    user_inv[item_name] += quantity
     save_inventories(inventories)
     return True
 
@@ -906,18 +885,42 @@ def remove_from_inventory(user_id, item_name, quantity=1):
     inventories = load_inventories()
     user_inv = inventories.get(str(user_id), {})
     
-    current_qty = user_inv.get(item_name, 0)
-    if current_qty < quantity:
-        return False  # Not enough items
+    if item_name not in user_inv or user_inv[item_name] < quantity:
+        return False
     
-    user_inv[item_name] = current_qty - quantity
+    user_inv[item_name] -= quantity
     if user_inv[item_name] <= 0:
-        del user_inv[item_name]
+        user_inv[item_name] = 0  # Keep the key but set to 0
     
-    inventories[str(user_id)] = user_inv
     save_inventories(inventories)
     return True
 
+
+def save_inventories(inventories):
+    with open(INVENTORY_FILE, "w") as f:
+        json.dump(inventories, f, indent=4)
+
+def load_rob_protection():
+    try:
+        with open(ROB_PROTECTION_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_rob_protection(protection_data):
+    with open(ROB_PROTECTION_FILE, "w") as f:
+        json.dump(protection_data, f, indent=4)
+
+def load_rob_history():
+    try:
+        with open(ROB_HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_rob_history(history_data):
+    with open(ROB_HISTORY_FILE, "w") as f:
+        json.dump(history_data, f, indent=4)
 
 class QuantitySelect(discord.ui.Select):
     def __init__(self, item_id, max_stack, *args, **kwargs):
