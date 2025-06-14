@@ -1144,7 +1144,7 @@ async def use(ctx):
 
 @bot.command()
 async def stock(ctx):
-    """Open the stock market interface"""
+    """Trade currencies in the stock market"""
     view = StockMarketView(ctx.author.id)
     embed = discord.Embed(
         title="📈 Stock Market",
@@ -1173,14 +1173,8 @@ class StockMarketView(discord.ui.View):
         self.amount = 1
         self.message = None
         
-        # Initialize UI components
-        self.setup_action_dropdown()
-        self.setup_currency_dropdown()
-        self.setup_amount_dropdown()
-        self.setup_confirm_button()
-
-    def setup_action_dropdown(self):
-        dropdown = discord.ui.Select(
+        # Initialize dropdowns with default options
+        self.action_dropdown = discord.ui.Select(
             placeholder="Select Action",
             options=[
                 discord.SelectOption(label="Buy", value="buy", emoji="🛒"),
@@ -1188,11 +1182,10 @@ class StockMarketView(discord.ui.View):
             ],
             row=0
         )
-        dropdown.callback = self.action_select
-        self.add_item(dropdown)
-
-    def setup_currency_dropdown(self):
-        dropdown = discord.ui.Select(
+        self.action_dropdown.callback = self.action_select
+        self.add_item(self.action_dropdown)
+        
+        self.currency_dropdown = discord.ui.Select(
             placeholder="Select Currency",
             options=[
                 discord.SelectOption(label="BobBux", value="BobBux", emoji="🔵"),
@@ -1202,40 +1195,33 @@ class StockMarketView(discord.ui.View):
             row=1,
             disabled=True
         )
-        dropdown.callback = self.currency_select
-        self.add_item(dropdown)
-
-    def setup_amount_dropdown(self):
-        dropdown = discord.ui.Select(
+        self.currency_dropdown.callback = self.currency_select
+        self.add_item(self.currency_dropdown)
+        
+        self.amount_dropdown = discord.ui.Select(
             placeholder="Select Amount",
-            options=[],
+            options=[discord.SelectOption(label="1", value="1")],  # Default option
             row=2,
             disabled=True
         )
-        dropdown.callback = self.amount_select
-        self.add_item(dropdown)
-
-    def setup_confirm_button(self):
-        button = discord.ui.Button(
+        self.amount_dropdown.callback = self.amount_select
+        self.add_item(self.amount_dropdown)
+        
+        self.confirm_button = discord.ui.Button(
             label="Confirm Trade",
             style=discord.ButtonStyle.green,
             row=3,
             disabled=True,
             emoji="✅"
         )
-        button.callback = self.confirm_trade
-        self.add_item(button)
+        self.confirm_button.callback = self.confirm_trade
+        self.add_item(self.confirm_button)
 
     async def update_ui_state(self, interaction: discord.Interaction):
         """Update UI components based on current selections"""
-        for item in self.children:
-            if isinstance(item, discord.ui.Select):
-                if item.placeholder == "Select Currency":
-                    item.disabled = self.action is None
-                elif item.placeholder == "Select Amount":
-                    item.disabled = self.currency is None
-        
-        self.children[-1].disabled = not (self.action and self.currency and self.amount)
+        self.currency_dropdown.disabled = self.action is None
+        self.amount_dropdown.disabled = self.currency is None
+        self.confirm_button.disabled = not (self.action and self.currency and self.amount)
         
         if interaction.response.is_done():
             await interaction.followup.edit_message(self.message.id, view=self)
@@ -1267,16 +1253,24 @@ class StockMarketView(discord.ui.View):
             max_affordable = user_inv.get(self.currency, 0)
         
         # Update amount dropdown
-        self.children[2].options = []
+        self.amount_dropdown.options = []
         amounts = [1, 5, 10, 25, 50, 100]
-        if max_affordable > 100:
-            amounts.append(discord.SelectOption(label="Max", value="max"))
         
         for amount in amounts:
-            if isinstance(amount, int) and amount <= max_affordable:
-                self.children[2].options.append(
+            if amount <= max_affordable:
+                self.amount_dropdown.options.append(
                     discord.SelectOption(label=str(amount), value=str(amount))
                 )
+        
+        if max_affordable > 0 and (max_affordable > 100 or max_affordable not in amounts):
+            self.amount_dropdown.options.append(
+                discord.SelectOption(label=f"Max ({max_affordable})", value="max")
+            )
+        
+        if self.amount_dropdown.options:
+            self.amount = int(self.amount_dropdown.options[0].value)
+        else:
+            self.amount = 0
         
         await self.update_ui_state(interaction)
         await interaction.followup.send(f"Selected currency: **{self.currency}**", ephemeral=True)
@@ -1330,9 +1324,10 @@ class StockMarketView(discord.ui.View):
             )
         
         elif self.action == "sell":
-            if user_inv.get(self.currency, 0) < self.amount:
+            current_owned = user_inv.get(self.currency, 0)
+            if current_owned < self.amount:
                 return await interaction.response.send_message(
-                    f"❌ You only have {user_inv.get(self.currency, 0)} {self.currency}!",
+                    f"❌ You only have {current_owned} {self.currency}!",
                     ephemeral=True
                 )
             
@@ -1348,7 +1343,7 @@ class StockMarketView(discord.ui.View):
                 f"✅ Sold {self.amount} {self.currency} for {total_earned} coins!\n"
                 f"• Current price: {prices[self.currency]} coins\n"
                 f"• Your balance: {user_balance + total_earned} coins\n"
-                f"• Remaining: {user_inv.get(self.currency, 0) - self.amount} {self.currency}"
+                f"• Remaining: {current_owned - self.amount} {self.currency}"
             )
         
         # Disable all components after trade
