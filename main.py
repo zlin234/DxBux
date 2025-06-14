@@ -1020,41 +1020,64 @@ class UseItemDropdown(discord.ui.Select):
     def __init__(self, user_id):
         self.user_id = user_id
         self.user_inv = get_inventory(user_id)
-
-        # Get all usable items from shop data
         shop_items = load_shop_items()
-        usable_items = {item_id: item_data for item_id, item_data in shop_items.items() 
-                       if item_data.get("usable", False)}  # Add "usable": true to shop items
-
-        options = []
         
-        # Check for each usable item if user has it
-        for item_id, item_data in usable_items.items():
-            if self.user_inv.get(item_id, 0) > 0:
+        options = []
+        for item_id, item_data in shop_items.items():
+            if item_data.get("usable", False) and self.user_inv.get(item_id, 0) > 0:
                 emoji = "🔒" if item_id == "padlock" else "📱"
                 options.append(discord.SelectOption(
-                    label=item_data["name"],
+                    label=f"{item_data['name']} (x{self.user_inv[item_id]})",
                     value=item_id,
-                    description=item_data["description"],
                     emoji=emoji
                 ))
-
+        
         if not options:
             options.append(discord.SelectOption(
                 label="No usable items",
                 value="none",
-                description="Buy some items first",
-                emoji="❌"
+                description="Buy items from the shop first"
             ))
 
         super().__init__(
             placeholder="Select item to use",
             min_values=1,
             max_values=1,
-            options=options
+            options=options,
+            row=0
         )
 
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_item = self.values[0]
+        await interaction.response.defer()
 
+class UseQuantitySelect(discord.ui.Select):
+    def __init__(self, max_amount: int, row: int = 1):
+        options = [discord.SelectOption(label=str(i), value=str(i)) for i in range(1, max_amount + 1)]
+        super().__init__(
+            placeholder="Select quantity",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=row
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.view.selected_quantity = int(self.values[0])
+        await interaction.response.defer()
+
+class UseItemView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.selected_item = None
+        self.selected_quantity = 1
+
+        self.add_item(UseItemDropdown(user_id))
+        self.add_item(UseQuantitySelect(10))  # Max 10 items at once
+
+    @discord.ui.button(label="Use Item", style=discord.ButtonStyle.green, row=2)
+    async def use_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 
 class UseItemView(discord.ui.View):
     def __init__(self, user_id):
