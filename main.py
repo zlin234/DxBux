@@ -1787,9 +1787,11 @@ async def leaderboard(ctx, type: str = "wallet"):
         current_pos = next(
             (i+1 for i, (uid, _) in enumerate(lb_data) if uid == ctx.author.display_name),
             len(lb_data)
+        )
         current_amount = next(
             (amt for uid, amt in lb_data if uid == ctx.author.display_name),
-            0)
+            0
+        )
         
         if current_pos > 10:
             embed.add_field(
