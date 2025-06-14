@@ -1845,26 +1845,120 @@ async def cf(ctx, amount: int):
 
 @bot.command(aliases=["balance"])
 async def bal(ctx, member: discord.Member = None):
-    if member is None:
-        member = ctx.author
-    balance = get_balance(member.id)
-    bank_data = get_bank_data(member.id)
-    plan_name = BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'
+    """Check your balance with an interactive UI"""
+    member = member or ctx.author
+    user_id = member.id
     
-    # Check for active loan
-    loan_data = get_loan(member.id)
-    loan_info = ""
-    if loan_data and not loan_data["repaid"]:
-        due_date = datetime.fromtimestamp(loan_data["due_date"])
-        loan_info = f"\n• Loan: ⚠️ **{loan_data['amount']} coins** (due {due_date.strftime('%Y-%m-%d')})"
-    
-    await ctx.send(
-        f"**{member.display_name}'s balances:**\n"
-        f"• Wallet: 💰 **{balance} coins**\n"
-        f"• Bank: 🏦 **{bank_data['deposited']} coins** ({plan_name})"
-        f"{loan_info}"
-    )
+    # Create the view with balance toggles
+    view = BalanceView(user_id)
+    await view.send_initial_message(ctx)
 
+class BalanceView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.current_mode = "wallet"  # wallet/bank/currency
+        self.message = None
+
+    async def send_initial_message(self, ctx):
+        """Send the initial balance message"""
+        embed = self.create_embed()
+        self.message = await ctx.send(embed=embed, view=self)
+    
+    def create_embed(self):
+        """Create an embed based on current view mode"""
+        balance = get_balance(self.user_id)
+        bank_data = get_bank_data(self.user_id)
+        inventory = get_inventory(self.user_id)
+        
+        embed = discord.Embed(color=discord.Color.blue())
+        embed.set_author(name=f"{ctx.guild.get_member(self.user_id).display_name}'s Balance", 
+                        icon_url=ctx.guild.get_member(self.user_id).avatar.url)
+
+        if self.current_mode == "wallet":
+            embed.title = "💰 Wallet Balance"
+            embed.description = f"**{balance:,} coins**"
+            
+            # Add loan info if exists
+            loan_data = get_loan(self.user_id)
+            if loan_data and not loan_data["repaid"]:
+                due_date = datetime.fromtimestamp(loan_data["due_date"])
+                embed.add_field(
+                    name="⚠️ Active Loan",
+                    value=f"{loan_data['amount']:,} coins (due {due_date.strftime('%Y-%m-%d')})",
+                    inline=False
+                )
+            
+        elif self.current_mode == "bank":
+            plan_name = BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'
+            embed.title = "🏦 Bank Balance"
+            embed.description = (
+                f"**{bank_data['deposited']:,} coins**\n"
+                f"*Plan: {plan_name}*\n"
+                f"*Interest: {BANK_PLANS[bank_data['plan']]['interest']*100 if bank_data['plan'] else 0}% daily*"
+            )
+            
+        elif self.current_mode == "currency":
+            embed.title = "💎 Currency Holdings"
+            embed.description = "Your digital assets:"
+            prices = load_currency_prices()
+            
+            for currency in ["BobBux", "DxBux", "Gold"]:
+                value = inventory.get(currency, 0)
+                embed.add_field(
+                    name=f"{currency}",
+                    value=(
+                        f"Amount: **{value:,}**\n"
+                        f"Value: **{value * prices[currency]:,} coins**\n"
+                        f"Price: {prices[currency]:,} coins each"
+                    ),
+                    inline=True
+                )
+        
+        # Update button styles to show active mode
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.style = (
+                    discord.ButtonStyle.primary 
+                    if child.custom_id == self.current_mode 
+                    else discord.ButtonStyle.secondary
+                )
+        
+        return embed
+
+    @discord.ui.button(label="Wallet", style=discord.ButtonStyle.primary, custom_id="wallet", row=0)
+    async def wallet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This isn't your balance!", ephemeral=True)
+        
+        self.current_mode = "wallet"
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Bank", style=discord.ButtonStyle.secondary, custom_id="bank", row=0)
+    async def bank_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This isn't your balance!", ephemeral=True)
+        
+        self.current_mode = "bank"
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    @discord.ui.button(label="Currency", style=discord.ButtonStyle.secondary, custom_id="currency", row=0)
+    async def currency_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ This isn't your balance!", ephemeral=True)
+        
+        self.current_mode = "currency"
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    async def on_timeout(self):
+        """Disable buttons when view times out"""
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.NotFound:
+                pass
 @bot.command(aliases=["lb"])
 async def leaderboard(ctx, type: str = "wallet"):
     """Show the wealth leaderboard (wallet, bank, or total)"""
