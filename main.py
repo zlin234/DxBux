@@ -136,17 +136,19 @@ def save_currency_prices(prices):
     with open(CURRENCY_PRICES_FILE, "w") as f:
         json.dump(prices, f)
 
-def update_currency_price(currency_name, amount_purchased):
+def update_currency_price(currency_name, amount_purchased=0):
     prices = load_currency_prices()
-    stocks = load_currency_stocks()
     
-    price_increase_percent = (amount_purchased / stocks[currency_name]) * 100
-    price_increase = prices[currency_name] * (price_increase_percent / 100)
-    prices[currency_name] = int(prices[currency_name] + max(price_increase, prices[currency_name] * 0.01))
+    if amount_purchased > 0:
+        # More aggressive price scaling for unlimited economy
+        price_increase = min(50, 0.5 * amount_purchased)  # Max 50% increase per transaction
+        prices[currency_name] = int(prices[currency_name] * (1 + price_increase/100))
+    
+    # Daily volatility
+    daily_change = random.uniform(0.95, 1.05)  # ±5% daily change
+    prices[currency_name] = max(10, int(prices[currency_name] * daily_change))
+    
     save_currency_prices(prices)
-    
-    stocks[currency_name] -= amount_purchased
-    save_currency_stocks(stocks)
     return prices[currency_name]
 
 def load_inventories():
@@ -886,13 +888,16 @@ def add_to_inventory(user_id, item_name, quantity=1):
     inventories = load_inventories()
     user_inv = inventories.get(str(user_id), {})
     
-    max_stack = load_shop_items().get(item_name, {}).get("max_stack", 1)
-    current_qty = user_inv.get(item_name, 0)
+    # Remove max_stack check for currencies
+    if item_name in ["BobBux", "DxBux", "Gold"]:
+        user_inv[item_name] = user_inv.get(item_name, 0) + quantity
+    else:
+        # Keep existing logic for other items
+        max_stack = load_shop_items().get(item_name, {}).get("max_stack", 1)
+        current_qty = user_inv.get(item_name, 0)
+        if current_qty + quantity > max_stack:
+            return False
     
-    if current_qty + quantity > max_stack:
-        return False  # Would exceed max stack
-    
-    user_inv[item_name] = current_qty + quantity
     inventories[str(user_id)] = user_inv
     save_inventories(inventories)
     return True
@@ -1267,38 +1272,33 @@ class StockMarketView(discord.ui.View):
         await self.update_ui_state()
         await interaction.followup.send(f"Selected amount: **{self.amount}**", ephemeral=True)
 
-    async def confirm_trade(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        async def confirm_trade(self, interaction: discord.Interaction):
+            if interaction.user.id != self.user_id:
+                return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+    
+            prices = load_currency_prices()
+            user_balance = get_balance(self.user_id)
+            user_inv = get_inventory(self.user_id)
+    
+            if self.action == "buy":
+                total_cost = prices[self.currency] * self.amount
+                if user_balance < total_cost:
+                    return await interaction.response.send_message(
+                        f"You need {total_cost} coins but only have {user_balance}!",
+                        ephemeral=True
+                    )
         
-        prices = load_currency_prices()
-        stocks = load_currency_stocks()
-        user_balance = get_balance(self.user_id)
-        user_inv = get_inventory(self.user_id)
+        # Execute buy (no supply check)
+        set_balance(self.user_id, user_balance - total_cost)
+        new_price = update_currency_price(self.currency, self.amount)
+        add_to_inventory(self.user_id, self.currency, self.amount)
         
-        if self.action == "buy":
-            total_cost = prices[self.currency] * self.amount
-            if user_balance < total_cost:
-                return await interaction.response.send_message(
-                    f"You need {total_cost} coins but only have {user_balance}!",
-                    ephemeral=True
-                )
-            if stocks[self.currency] < self.amount:
-                return await interaction.response.send_message(
-                    f"Only {stocks[self.currency]} {self.currency} available!",
-                    ephemeral=True
-                )
-            
-            # Execute buy
-            set_balance(self.user_id, user_balance - total_cost)
-            new_price = update_currency_price(self.currency, self.amount)
-            add_to_inventory(self.user_id, self.currency, self.amount)
-            
-            await interaction.response.send_message(
-                f"✅ Purchased {self.amount} {self.currency} for {total_cost} coins!\n"
-                f"• New price: {new_price} coins\n"
-                f"• Your balance: {user_balance - total_cost} coins"
-            )
+        await interaction.response.send_message(
+            f"✅ Purchased {self.amount} {self.currency} for {total_cost} coins!\n"
+            f"• New price: {new_price} coins\n"
+            f"• Your balance: {user_balance - total_cost} coins\n"
+            f"• Now own: {user_inv.get(self.currency, 0) + self.amount} {self.currency}"
+        )
             
         elif self.action == "sell":
             if user_inv.get(self.currency, 0) < self.amount:
@@ -1906,17 +1906,17 @@ async def admin_setbal(ctx, member: discord.Member, amount: int):
 @bot.command()
 @is_admin()
 async def checkall(ctx):
-    """Export all user data including currencies"""
+    """Export all user data including unlimited currencies"""
     balances = load_balances()
     bank_data = load_bank_data()
     loans = load_loans()
     inventories = load_inventories()
     currency_prices = load_currency_prices()
-    currency_stocks = load_currency_stocks()
     
     output = ["=== MARKET DATA ==="]
     for currency in ["BobBux", "DxBux", "Gold"]:
-        output.append(f"MARKET|{currency}|{currency_prices[currency]}|{currency_stocks[currency]}")
+        # Show price with INF for unlimited supply
+        output.append(f"MARKET|{currency}|{currency_prices[currency]}|INF")  
     
     output.append("\n=== USER DATA ===")
     all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys()) | set(inventories.keys())
@@ -1931,7 +1931,19 @@ async def checkall(ctx):
         has_loan = "Y" if loan_info and not loan_info.get("repaid", True) else "N"
         
         inv_info = inventories.get(user_id, {})
-        inv_str = ",".join(f"{k}:{v}" for k,v in inv_info.items()) if inv_info else "None"
+        # Ensure all currencies are included with exact quantities
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            if currency not in inv_info:
+                inv_info[currency] = 0
+        
+        # Format inventory with currencies first
+        inv_parts = []
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            inv_parts.append(f"{currency}:{inv_info.get(currency, 0)}")
+        # Add other items
+        inv_parts.extend(f"{k}:{v}" for k,v in inv_info.items() if k not in ["BobBux", "DxBux", "Gold"])
+        
+        inv_str = ",".join(inv_parts) if inv_parts else "None"
         
         output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{has_loan}|{inv_str}")
     
@@ -1956,7 +1968,7 @@ async def checkall(ctx):
 @bot.command()
 @is_admin()
 async def setall(ctx, *, data: str):
-    """Import all user data including currencies"""
+    """Import all user data with unlimited currencies"""
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
     
@@ -1965,8 +1977,7 @@ async def setall(ctx, *, data: str):
     bank_data = {}
     loans = {}
     inventories = {}
-    currency_prices = load_currency_prices()
-    currency_stocks = load_currency_stocks()
+    currency_prices = load_currency_prices()  # Start with current prices
     
     current_section = None
     
@@ -1985,11 +1996,11 @@ async def setall(ctx, *, data: str):
         if current_section == "market":
             if line.startswith("MARKET|"):
                 parts = line.split('|')
-                if len(parts) == 4:
+                if len(parts) >= 3:  # Only need currency and price
                     currency = parts[1]
                     try:
                         currency_prices[currency] = int(parts[2])
-                        currency_stocks[currency] = int(parts[3])
+                        # Ignore stock quantity (parts[3]) since unlimited
                     except (ValueError, KeyError):
                         continue
         
@@ -1998,32 +2009,21 @@ async def setall(ctx, *, data: str):
             if len(parts) >= 5:
                 try:
                     user_id = parts[0].strip()
-                    
-                    # Handle wallet balance (convert scientific notation if needed)
-                    wallet_str = parts[1].strip()
-                    if 'e' in wallet_str.lower():
-                        wallet = int(float(wallet_str))
-                    else:
-                        wallet = int(wallet_str)
-                    
+                    wallet = int(float(parts[1].strip()))  # Handle scientific notation
                     plan = parts[2].strip()
-                    
-                    # Handle deposited amount (convert scientific notation if needed)
-                    deposited_str = parts[3].strip()
-                    if 'e' in deposited_str.lower():
-                        deposited = float(deposited_str)
-                    else:
-                        deposited = float(deposited_str)
+                    deposited = float(parts[3].strip())
+                    has_loan = parts[4].strip().upper() == "Y"
+                    inventory = parts[5].strip() if len(parts) > 5 else "None"
                     
                     balances[user_id] = wallet
                     bank_data[user_id] = {
                         "plan": None if plan.lower() == "none" else plan.lower(),
                         "deposited": deposited,
-                        "last_interest_claim": 0,  # Initialize these fields
+                        "last_interest_claim": 0,
                         "pending_interest": 0
                     }
                     
-                    if len(parts) > 4 and parts[4].strip().upper() == "Y":
+                    if has_loan:
                         loans[user_id] = {
                             "amount": 1000,
                             "interest_rate": 0.1,
@@ -2032,54 +2032,68 @@ async def setall(ctx, *, data: str):
                             "repaid": False
                         }
                     
-                    if len(parts) > 5 and parts[5].strip().lower() != "none":
-                        inv_items = {}
-                        for item_str in parts[5].strip().split(','):
+                    # Process inventory with exact quantities
+                    inv_items = {}
+                    if inventory.lower() != "none":
+                        for item_str in inventory.split(','):
                             if ':' in item_str:
                                 item_name, quantity = item_str.split(':')
                                 try:
                                     inv_items[item_name.strip()] = int(quantity)
                                 except ValueError:
                                     continue
-                        inventories[user_id] = inv_items
+                    
+                    # Ensure all currencies exist with their exact values
+                    for currency in ["BobBux", "DxBux", "Gold"]:
+                        if currency not in inv_items:
+                            # Only set to 0 if not explicitly provided
+                            if not any(c in inventory for c in ["BobBux", "DxBux", "Gold"]):
+                                inv_items[currency] = 0
+                    
+                    inventories[user_id] = inv_items
                 
                 except (ValueError, IndexError) as e:
                     print(f"Error processing line: {line} - {e}")
                     continue
     
-    # Save all data
+    # Save all data (without stock limits)
     save_balances(balances)
     save_bank_data(bank_data)
     save_loans(loans)
     save_inventories(inventories)
     save_currency_prices(currency_prices)
-    save_currency_stocks(currency_stocks)
     
     # Create detailed response
     embed = discord.Embed(
         title="✅ Data Import Complete",
+        description="Successfully imported unlimited currency economy",
         color=discord.Color.green()
     )
     
+    # Count currency holders
+    currency_holders = {
+        "BobBux": sum(1 for inv in inventories.values() if inv.get("BobBux", 0) > 0),
+        "DxBux": sum(1 for inv in inventories.values() if inv.get("DxBux", 0) > 0),
+        "Gold": sum(1 for inv in inventories.values() if inv.get("Gold", 0) > 0)
+    }
+    
     embed.add_field(
         name="User Data",
-        value=f"• {len(balances)} balances imported\n"
-              f"• {len(bank_data)} bank accounts\n"
-              f"• {len(loans)} active loans\n"
-              f"• {len(inventories)} inventories",
+        value=f"• {len(balances)} balances\n• {len(bank_data)} bank accounts\n• {len(loans)} loans",
         inline=False
     )
     
     embed.add_field(
-        name="Market Data",
-        value=f"• BobBux: {currency_prices['BobBux']} coins\n"
-              f"• DxBux: {currency_prices['DxBux']} coins\n"
-              f"• Gold: {currency_prices['Gold']} coins",
+        name="Currency Holders",
+        value=f"• BobBux: {currency_holders['BobBux']}\n• DxBux: {currency_holders['DxBux']}\n• Gold: {currency_holders['Gold']}",
         inline=True
     )
     
-    total_coins = sum(balances.values()) + sum(bank['deposited'] for bank in bank_data.values())
-    embed.set_footer(text=f"Total economy value: {total_coins:,} coins")
+    embed.add_field(
+        name="Current Prices",
+        value=f"• BobBux: {currency_prices['BobBux']}\n• DxBux: {currency_prices['DxBux']}\n• Gold: {currency_prices['Gold']}",
+        inline=True
+    )
     
     await ctx.send(embed=embed)
 
