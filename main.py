@@ -1918,14 +1918,29 @@ async def setall(ctx, *, data: str):
             if len(parts) >= 5:
                 try:
                     user_id = parts[0].strip()
-                    wallet = int(parts[1].strip())
+                    
+                    # Handle wallet balance (convert scientific notation if needed)
+                    wallet_str = parts[1].strip()
+                    if 'e' in wallet_str.lower():
+                        wallet = int(float(wallet_str))
+                    else:
+                        wallet = int(wallet_str)
+                    
                     plan = parts[2].strip()
-                    deposited = float(parts[3].strip())
+                    
+                    # Handle deposited amount (convert scientific notation if needed)
+                    deposited_str = parts[3].strip()
+                    if 'e' in deposited_str.lower():
+                        deposited = float(deposited_str)
+                    else:
+                        deposited = float(deposited_str)
                     
                     balances[user_id] = wallet
                     bank_data[user_id] = {
-                        "plan": None if plan.lower() == "none" else plan,
-                        "deposited": deposited
+                        "plan": None if plan.lower() == "none" else plan.lower(),
+                        "deposited": deposited,
+                        "last_interest_claim": 0,  # Initialize these fields
+                        "pending_interest": 0
                     }
                     
                     if len(parts) > 4 and parts[4].strip().upper() == "Y":
@@ -1938,20 +1953,21 @@ async def setall(ctx, *, data: str):
                         }
                     
                     if len(parts) > 5 and parts[5].strip().lower() != "none":
-                        inv_items = parts[5].strip().split(',')
-                        user_inv = {}
-                        for item_str in inv_items:
+                        inv_items = {}
+                        for item_str in parts[5].strip().split(','):
                             if ':' in item_str:
                                 item_name, quantity = item_str.split(':')
                                 try:
-                                    user_inv[item_name.strip()] = int(quantity)
+                                    inv_items[item_name.strip()] = int(quantity)
                                 except ValueError:
                                     continue
-                        inventories[user_id] = user_inv
+                        inventories[user_id] = inv_items
                 
-                except ValueError:
+                except (ValueError, IndexError) as e:
+                    print(f"Error processing line: {line} - {e}")
                     continue
     
+    # Save all data
     save_balances(balances)
     save_bank_data(bank_data)
     save_loans(loans)
@@ -1959,12 +1975,33 @@ async def setall(ctx, *, data: str):
     save_currency_prices(currency_prices)
     save_currency_stocks(currency_stocks)
     
-    await ctx.send(
-        f"✅ Successfully imported:\n"
-        f"- {len(balances)} user balances\n"
-        f"- {len(inventories)} inventories\n"
-        f"- Market data for 3 currencies"
+    # Create detailed response
+    embed = discord.Embed(
+        title="✅ Data Import Complete",
+        color=discord.Color.green()
     )
+    
+    embed.add_field(
+        name="User Data",
+        value=f"• {len(balances)} balances imported\n"
+              f"• {len(bank_data)} bank accounts\n"
+              f"• {len(loans)} active loans\n"
+              f"• {len(inventories)} inventories",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="Market Data",
+        value=f"• BobBux: {currency_prices['BobBux']} coins\n"
+              f"• DxBux: {currency_prices['DxBux']} coins\n"
+              f"• Gold: {currency_prices['Gold']} coins",
+        inline=True
+    )
+    
+    total_coins = sum(balances.values()) + sum(bank['deposited'] for bank in bank_data.values())
+    embed.set_footer(text=f"Total economy value: {total_coins:,} coins")
+    
+    await ctx.send(embed=embed)
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
 
