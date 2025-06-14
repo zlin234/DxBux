@@ -1066,18 +1066,6 @@ class UseQuantitySelect(discord.ui.Select):
         self.view.selected_quantity = int(self.values[0])
         await interaction.response.defer()
 
-class UseItemView(discord.ui.View):
-    def __init__(self, user_id):
-        super().__init__(timeout=60)
-        self.user_id = user_id
-        self.selected_item = None
-        self.selected_quantity = 1
-
-        self.add_item(UseItemDropdown(user_id))
-        self.add_item(UseQuantitySelect(10))  # Max 10 items at once
-
-    @discord.ui.button(label="Use Item", style=discord.ButtonStyle.green, row=2)
-    async def use_item_button(self, interaction: discord.Interaction, button: discord.ui.Button):
 
 class UseItemView(discord.ui.View):
     def __init__(self, user_id):
