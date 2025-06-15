@@ -922,21 +922,6 @@ def load_inventories():
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
-def get_inventory(user_id):
-    inventories = load_inventories()
-    user_inv = inventories.setdefault(str(user_id), {})
-    
-    # Initialize all possible items
-    for currency in ["BobBux", "DxBux", "Gold"]:
-        if currency not in user_inv:
-            user_inv[currency] = 0
-            
-    for item_id in load_shop_items().keys():
-        if item_id not in user_inv:
-            user_inv[item_id] = 0
-    
-    return user_inv
-
 def add_to_inventory(user_id, item_name, quantity=1):
     inventories = load_inventories()
     user_inv = inventories.setdefault(str(user_id), {})
