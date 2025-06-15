@@ -3,7 +3,7 @@ import time
 import discord
 import asyncio
 from typing import List, Dict, Tuple
-from discord.ext import commands
+from discord.ext import commands, tasks
 import random
 import json
 from threading import Thread
@@ -2230,6 +2230,29 @@ async def setall(ctx, *, data: str):
     )
     
     await ctx.send(embed=embed)
+
+
+#------------------BACKGROUND TASKS------------------------
+
+def restock_all_currencies(amount=100, max_stock=10000):
+    stocks = load_currency_stocks()
+    for currency in stocks:
+        stocks[currency] = min(stocks[currency] + amount, max_stock)
+    save_currency_stocks(stocks)
+    print("[StockMarket] Stock increased by", amount)
+
+@tasks.loop(minutes=30)
+async def stock_restock_task():
+    restock_all_currencies()
+
+@bot.event
+async def on_ready():
+    print(f"Bot connected as {bot.user}")
+    restock_all_currencies()  # Instant restock on startup
+    if not stock_restock_task.is_running():
+        stock_restock_task.start()
+
+
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
 
