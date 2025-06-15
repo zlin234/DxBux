@@ -112,17 +112,16 @@ def set_balance(user_id, amount):
 
 def load_currency_stocks():
     try:
-        with open("currency_stocks.json", "r") as f:
+        with open(CURRENCY_STOCKS_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        stocks = {"BobBux": 20000, "DxBux": 20000, "Gold": 20000}
+        stocks = {"BobBux": 10000, "DxBux": 10000, "Gold": 10000}
         save_currency_stocks(stocks)
         return stocks
 
 def save_currency_stocks(stocks):
-    with open("currency_stocks.json", "w") as f:
+    with open(CURRENCY_STOCKS_FILE, "w") as f:
         json.dump(stocks, f)
-
 
 def load_currency_prices():
     try:
@@ -137,20 +136,42 @@ def save_currency_prices(prices):
     with open(CURRENCY_PRICES_FILE, "w") as f:
         json.dump(prices, f)
 
-def update_currency_price(currency_name, amount_purchased=0):
+def update_currency_price(currency_name, amount_purchased):
     prices = load_currency_prices()
+    stocks = load_currency_stocks()
     
-    if amount_purchased > 0:
-        # More aggressive price scaling for unlimited economy
-        price_increase = min(50, 0.5 * amount_purchased)  # Max 50% increase per transaction
-        prices[currency_name] = int(prices[currency_name] * (1 + price_increase/100))
-    
-    # Daily volatility
-    daily_change = random.uniform(0.95, 1.05)  # ±5% daily change
-    prices[currency_name] = max(10, int(prices[currency_name] * daily_change))
-    
+    price_increase_percent = (amount_purchased / stocks[currency_name]) * 100
+    price_increase = prices[currency_name] * (price_increase_percent / 100)
+    prices[currency_name] = int(prices[currency_name] + max(price_increase, prices[currency_name] * 0.01))
     save_currency_prices(prices)
+    
+    stocks[currency_name] -= amount_purchased
+    save_currency_stocks(stocks)
     return prices[currency_name]
+
+def load_inventories():
+    try:
+        with open(INVENTORY_FILE, "r") as f:
+            inventories = json.load(f)
+    except FileNotFoundError:
+        inventories = {}
+    
+    for user_id, inv in inventories.items():
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            if currency not in inv:
+                inv[currency] = 0
+                
+    return inventories
+
+def get_inventory(user_id):
+    inventories = load_inventories()
+    user_inv = inventories.get(str(user_id), {})
+    
+    for currency in ["BobBux", "DxBux", "Gold"]:
+        if currency not in user_inv:
+            user_inv[currency] = 0
+    
+    return user_inv
 
 
 # ------------------ LOAN MANAGEMENT ------------------
@@ -1210,10 +1231,119 @@ async def use(ctx):
 
 # --------------------STOCK----------------------
 
-# STOCK MARKET COMMAND AND UI
+class StockMarketView(discord.ui.View):
+    def __init__(self, user_id: int):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.action = None
+        self.currency = None
+        self.amount = 1
+        self.message = None
+        
+    async def update_message(self, interaction: discord.Interaction = None):
+        prices = load_currency_prices()
+        stocks = load_currency_stocks()
+        user_balance = get_balance(self.user_id)
+        user_inv = get_inventory(self.user_id)
+        
+        embed = discord.Embed(title="📈 Stock Market", color=discord.Color.gold())
+        
+        # Show current selections at the top
+        if self.action and self.currency:
+            embed.description = (
+                f"**Selected Action:** {self.action.upper()}\n"
+                f"**Selected Currency:** {self.currency}\n"
+                f"**Selected Amount:** {self.amount}\n\n"
+                f"Current Price: {prices[self.currency]} coins"
+            )
+        
+        for currency in ["BobBux", "DxBux", "Gold"]:
+            price_change = ""
+            # You might want to track previous prices to show % changes
+            embed.add_field(
+                name=f"{currency}",
+                value=(
+                    f"Price: {prices[currency]} coins\n"
+                    f"Stock: {stocks[currency]}\n"
+                    f"You own: {user_inv.get(currency, 0)}\n"
+                    f"{price_change}"
+                ),
+                inline=True
+            )
+        
+        embed.set_footer(text=f"Your balance: {user_balance} coins")
+        
+        if interaction and interaction.response.is_done():
+            await interaction.followup.edit_message(self.message.id, embed=embed, view=self)
+        elif interaction:
+            await interaction.response.edit_message(embed=embed, view=self)
+        elif self.message:
+            await self.message.edit(embed=embed, view=self)
+
+    @discord.ui.select(
+        placeholder="Select Action (Buy/Sell)",
+        options=[discord.SelectOption(label="Buy", value="buy"), discord.SelectOption(label="Sell", value="sell")],
+        row=0
+    )
+    async def action_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        self.action = select.values[0]
+        await self.update_message(interaction)
+        # Send confirmation of selection
+        await interaction.followup.send(f"You selected to **{self.action}**", ephemeral=True)
+    
+    @discord.ui.select(
+        placeholder="Select Currency",
+        options=[
+            discord.SelectOption(label="BobBux", value="BobBux", description="Volatile market"), 
+            discord.SelectOption(label="DxBux", value="DxBux", description="Stable growth"),
+            discord.SelectOption(label="Gold", value="Gold", description="Premium currency")
+        ],
+        row=1
+    )
+    async def currency_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        self.currency = select.values[0]
+        await self.update_message(interaction)
+        # Send confirmation of selection
+        await interaction.followup.send(f"You selected **{self.currency}**", ephemeral=True)
+    
+    @discord.ui.select(
+        placeholder="Select Amount",
+        options=[discord.SelectOption(label=str(i), value=str(i)) for i in [1, 5, 10, 25, 50, 100, "Max"]],
+        row=2
+    )
+    async def amount_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
+        
+        selected = select.values[0]
+        if selected == "Max":
+            prices = load_currency_prices()
+            user_balance = get_balance(self.user_id)
+            user_inv = get_inventory(self.user_id)
+            
+            if self.action == "buy":
+                max_possible = min(
+                    user_balance // prices[self.currency],
+                    load_currency_stocks()[self.currency]
+                )
+            else:  # sell
+                max_possible = user_inv.get(self.currency, 0)
+            
+            self.amount = max_possible if max_possible > 0 else 1
+        else:
+            self.amount = int(selected)
+            
+        await self.update_message(interaction)
+        # Send confirmation of selection
+        await interaction.followup.send(f"Amount set to **{self.amount}**", ephemeral=True)
+
 @bot.command()
 async def stock(ctx):
-    """Trade currencies in the stock market"""
+    """Open the stock market interface"""
     view = StockMarketView(ctx.author.id)
     embed = discord.Embed(
         title="📈 Stock Market",
@@ -1223,289 +1353,16 @@ async def stock(ctx):
     
     prices = load_currency_prices()
     stocks = load_currency_stocks()
-
+    
     for currency in ["BobBux", "DxBux", "Gold"]:
         embed.add_field(
             name=f"{currency}",
-            value=(
-                f"Price: {prices[currency]} coins\n"
-                f"Supply Left: {stocks[currency]:,}\n"
-                f"Total Value: {prices[currency] * stocks[currency]:,} coins"
-            ),
+            value=f"Price: {prices[currency]} coins\nStock: {stocks[currency]}",
             inline=True
         )
-
-    embed.set_footer(text=f"Your balance: {get_balance(ctx.author.id):,} coins")
+    
+    embed.set_footer(text=f"Your balance: {get_balance(ctx.author.id)} coins")
     view.message = await ctx.send(embed=embed, view=view)
-
-class StockMarketView(discord.ui.View):
-    def __init__(self, user_id: int):
-        super().__init__(timeout=120)
-        self.user_id = user_id
-        self.action = None
-        self.currency = None
-        self.amount = 1
-        self.message = None
-        
-        # Initialize dropdowns
-        self.action_dropdown = discord.ui.Select(
-            placeholder="Select Action",
-            options=[
-                discord.SelectOption(label="Buy", value="buy", emoji="🛒"),
-                discord.SelectOption(label="Sell", value="sell", emoji="💰")
-            ],
-            row=0
-        )
-        self.action_dropdown.callback = self.action_select
-        self.add_item(self.action_dropdown)
-        
-        self.currency_dropdown = discord.ui.Select(
-            placeholder="Select Currency",
-            options=[
-                discord.SelectOption(label="BobBux", value="BobBux", emoji="🔵"),
-                discord.SelectOption(label="DxBux", value="DxBux", emoji="🟢"),
-                discord.SelectOption(label="Gold", value="Gold", emoji="🟡")
-            ],
-            row=1,
-            disabled=True
-        )
-        self.currency_dropdown.callback = self.currency_select
-        self.add_item(self.currency_dropdown)
-        
-        self.amount_dropdown = discord.ui.Select(
-            placeholder="Select Amount",
-            options=[discord.SelectOption(label="1", value="1")],
-            row=2,
-            disabled=True
-        )
-        self.amount_dropdown.callback = self.amount_select
-        self.add_item(self.amount_dropdown)
-        
-        self.confirm_button = discord.ui.Button(
-            label="Confirm Trade",
-            style=discord.ButtonStyle.green,
-            row=3,
-            disabled=True,
-            emoji="✅"
-        )
-        self.confirm_button.callback = self.confirm_trade
-        self.add_item(self.confirm_button)
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.NotFound:
-                pass
-
-    async def update_ui_state(self, interaction: discord.Interaction):
-        self.currency_dropdown.disabled = self.action is None
-        self.amount_dropdown.disabled = self.currency is None
-        self.confirm_button.disabled = not (self.action and self.currency and self.amount)
-        
-        if interaction.response.is_done():
-            await interaction.followup.edit_message(self.message.id, view=self)
-        else:
-            await interaction.response.edit_message(view=self)
-
-    async def action_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-        
-        await interaction.response.defer()
-        self.action = interaction.data['values'][0]
-        self.currency = None  # Reset currency when action changes
-        self.amount = 1       # Reset amount
-        await self.update_ui_state(interaction)
-        await interaction.followup.send(f"Selected action: **{self.action.capitalize()}**", ephemeral=True)
-
-    async def currency_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("❌ This menu isn't for you!", ephemeral=True)
-    
-        await interaction.response.defer()
-        self.currency = interaction.data['values'][0]
-
-        user_balance = get_balance(self.user_id)
-        user_inv = get_inventory(self.user_id)
-        prices = load_currency_prices()
-        stocks = load_currency_stocks()
-
-        if self.action == "buy":
-            price = prices[self.currency]
-            max_by_balance = user_balance // price
-            max_by_stock = stocks.get(self.currency, 0)
-            max_affordable = min(max_by_balance, max_by_stock)
-        else:  # sell
-            max_affordable = user_inv.get(self.currency, 0)
-    
-        self.amount_dropdown.options = []
-        standard_amounts = [1, 5, 10, 25, 50, 100]
-    
-        for amt in standard_amounts:
-            if amt <= max_affordable:
-                self.amount_dropdown.options.append(
-                    discord.SelectOption(label=str(amt), value=str(amt))
-                )
-    
-        if max_affordable > 0 and (max_affordable not in standard_amounts or max_affordable > 100):
-            self.amount_dropdown.options.append(
-                discord.SelectOption(label=f"Max ({max_affordable})", value="max")
-            )
-
-        if self.amount_dropdown.options:
-            self.amount_dropdown.disabled = False
-            self.amount = int(self.amount_dropdown.options[0].value) if self.amount_dropdown.options[0].value.isdigit() else max_affordable
-        else:
-            self.amount_dropdown.disabled = True
-            self.amount = 0
-            await interaction.followup.send(
-                "⚠️ You can't afford or don't have any of this currency!",
-                ephemeral=True
-            )
-
-        self.confirm_button.disabled = True
-        await interaction.edit_original_response(view=self)
-        await interaction.followup.send(
-            f"Selected currency: **{self.currency}**",
-            ephemeral=True
-        )
-
-    async def amount_select(self, interaction: discord.Interaction):
-        if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-        
-        await interaction.response.defer()
-        selected = interaction.data['values'][0]
-        if selected == "max":
-            prices = load_currency_prices()
-            user_balance = get_balance(self.user_id)
-            user_inv = get_inventory(self.user_id)
-            stocks = load_currency_stocks()
-            
-            if self.action == "buy":
-                self.amount = min(
-                    user_balance // prices[self.currency],
-                    stocks[self.currency]
-                )
-            else:  # sell
-                self.amount = user_inv.get(self.currency, 0)
-        else:
-            self.amount = int(selected)
-        
-        await self.update_ui_state(interaction)
-        await interaction.followup.send(f"Selected amount: **{self.amount}**", ephemeral=True)
-
-    async def confirm_trade(self, interaction: discord.Interaction):
-        try:
-            if interaction.user.id != self.user_id:
-                return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-            
-            await interaction.response.defer()
-            prices = load_currency_prices()
-            stocks = load_currency_stocks()
-            user_balance = get_balance(self.user_id)
-            user_inv = get_inventory(self.user_id)
-            
-            if self.action == "buy":
-                total_cost = prices[self.currency] * self.amount
-                
-                # Validate purchase
-                if user_balance < total_cost:
-                    return await interaction.followup.send(
-                        f"❌ You need {total_cost} coins but only have {user_balance}!",
-                        ephemeral=True
-                    )
-                
-                if stocks[self.currency] < self.amount:
-                    return await interaction.followup.send(
-                        f"❌ Not enough {self.currency} in stock! Only {stocks[self.currency]} available.",
-                        ephemeral=True
-                    )
-                
-                # Execute buy
-                set_balance(self.user_id, user_balance - total_cost)
-                add_to_inventory(self.user_id, self.currency, self.amount)
-                
-                # Update market
-                stocks[self.currency] -= self.amount
-                save_currency_stocks(stocks)
-                new_price = update_currency_price(self.currency, self.amount)
-                
-                await interaction.followup.send(
-                    f"✅ Purchased {self.amount} {self.currency} for {total_cost} coins!\n"
-                    f"• New price: {new_price} coins\n"
-                    f"• Remaining supply: {stocks[self.currency]} {self.currency}\n"
-                    f"• Your balance: {user_balance - total_cost} coins\n"
-                    f"• Now own: {user_inv.get(self.currency, 0) + self.amount} {self.currency}"
-                )
-            
-            elif self.action == "sell":
-                current_owned = user_inv.get(self.currency, 0)
-                if current_owned < self.amount:
-                    return await interaction.followup.send(
-                        f"❌ You only have {current_owned} {self.currency}!",
-                        ephemeral=True
-                    )
-                
-                sell_price = int(prices[self.currency] * 0.9)  # 10% market fee
-                total_earned = sell_price * self.amount
-                
-                # Execute sell
-                set_balance(self.user_id, user_balance + total_earned)
-                remove_from_inventory(self.user_id, self.currency, self.amount)
-                
-                # Update market
-                stocks[self.currency] += self.amount
-                save_currency_stocks(stocks)
-                update_currency_price(self.currency, -self.amount)
-                
-                await interaction.followup.send(
-                    f"✅ Sold {self.amount} {self.currency} for {total_earned} coins!\n"
-                    f"• Current price: {prices[self.currency]} coins\n"
-                    f"• Available supply: {stocks[self.currency]} {self.currency}\n"
-                    f"• Your balance: {user_balance + total_earned} coins\n"
-                    f"• Remaining: {current_owned - self.amount} {self.currency}"
-                )
-            
-            # Disable all components after trade
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(view=self)
-            
-            # Update the original stock market message
-            await self.update_stock_display(interaction)
-            
-        except Exception as e:
-            print(f"Error in confirm_trade: {e}")
-            await interaction.followup.send("An error occurred while processing your trade.", ephemeral=True)
-
-    async def update_stock_display(self, interaction: discord.Interaction):
-        """Update the original stock market display after a trade"""
-        prices = load_currency_prices()
-        stocks = load_currency_stocks()
-        
-        embed = discord.Embed(
-            title="📈 Stock Market",
-            description="Select an action, currency, and amount to trade",
-            color=discord.Color.gold()
-        )
-        
-        for currency in ["BobBux", "DxBux", "Gold"]:
-            embed.add_field(
-                name=f"{currency}",
-                value=(
-                    f"Price: {prices[currency]} coins\n"
-                    f"Supply Left: {stocks[currency]:,}\n"
-                    f"Total Value: {prices[currency] * stocks[currency]:,} coins"
-                ),
-                inline=True
-            )
-        
-        embed.set_footer(text=f"Your balance: {get_balance(self.user_id):,} coins")
-        await interaction.message.edit(embed=embed)
 
 # ------------------ WHEEL/BLACKJACK ------------------
 
