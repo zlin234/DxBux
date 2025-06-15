@@ -1266,56 +1266,56 @@ class StockMarketView(discord.ui.View):
             await self.message.edit(embed=embed, view=self)
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.green, row=3)
-async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-    if interaction.user.id != self.user_id:
-        return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
-
-    if not self.action or not self.currency or not self.amount:
-        return await interaction.response.send_message("Please complete all selections before confirming.", ephemeral=True)
-
-    prices = load_currency_prices()
-    stocks = load_currency_stocks()
-    user_balance = get_balance(self.user_id)
-    user_inv = get_inventory(self.user_id)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This isn't your menu!", ephemeral=True)
     
-    currency = self.currency
-    price = prices[currency]
-    stock = stocks[currency]
-    amount = self.amount
-    total_price = price * amount
+        if not self.action or not self.currency or not self.amount:
+            return await interaction.response.send_message("Please complete all selections before confirming.", ephemeral=True)
 
-    if self.action == "buy":
-        if total_price > user_balance:
-            return await interaction.response.send_message("You don't have enough coins.", ephemeral=True)
-        if amount > stock:
-            return await interaction.response.send_message("Not enough stock available.", ephemeral=True)
+        prices = load_currency_prices()
+        stocks = load_currency_stocks()
+        user_balance = get_balance(self.user_id)
+        user_inv = get_inventory(self.user_id)
+    
+        currency = self.currency
+        price = prices[currency]
+        stock = stocks[currency]
+        amount = self.amount
+        total_price = price * amount
 
-        # Buy logic
-        set_balance(self.user_id, user_balance - total_price)
-        user_inv[currency] = user_inv.get(currency, 0) + amount
-        stocks[currency] -= amount
-        update_currency_price(currency, amount)
+        if self.action == "buy":
+            if total_price > user_balance:
+                return await interaction.response.send_message("You don't have enough coins.", ephemeral=True)
+            if amount > stock:
+                return await interaction.response.send_message("Not enough stock available.", ephemeral=True)
 
-    elif self.action == "sell":
-        if user_inv.get(currency, 0) < amount:
-            return await interaction.response.send_message("You don't have enough to sell.", ephemeral=True)
+            # Buy logic
+            set_balance(self.user_id, user_balance - total_price)
+            user_inv[currency] = user_inv.get(currency, 0) + amount
+            stocks[currency] -= amount
+            update_currency_price(currency, amount)
 
-        # Sell logic
-        set_balance(self.user_id, user_balance + total_price)
-        user_inv[currency] -= amount
-        stocks[currency] += amount
-        # Optional: You can reduce price on sell, but not done here
+        elif self.action == "sell":
+            if user_inv.get(currency, 0) < amount:
+                return await interaction.response.send_message("You don't have enough to sell.", ephemeral=True)
 
-    # Save results
-    inventories = load_inventories()
-    inventories[str(self.user_id)] = user_inv
-    with open(INVENTORY_FILE, "w") as f:
-        json.dump(inventories, f, indent=4)
+            # Sell logic
+            set_balance(self.user_id, user_balance + total_price)
+            user_inv[currency] -= amount
+            stocks[currency] += amount
+            # Optional: You can reduce price on sell, but not done here
 
-    save_currency_stocks(stocks)
+        # Save results
+        inventories = load_inventories()
+        inventories[str(self.user_id)] = user_inv
+        with open(INVENTORY_FILE, "w") as f:
+            json.dump(inventories, f, indent=4)
 
-    await interaction.response.send_message(f"✅ You **{self.action}ed** {amount} {currency} for {total_price} coins.", ephemeral=True)
-    await self.update_message()
+        save_currency_stocks(stocks)
+
+        await interaction.response.send_message(f"✅ You **{self.action}ed** {amount} {currency} for {total_price} coins.", ephemeral=True)
+        await self.update_message()
 
 
     @discord.ui.select(
