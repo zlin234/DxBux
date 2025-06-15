@@ -686,52 +686,114 @@ async def interest(ctx):
     """Claim your accumulated interest (24h cooldown)"""
     user_id = ctx.author.id
     bank_data = get_bank_data(user_id)
-    
+
     if bank_data["plan"] is None:
         return await ctx.send("❌ You don't have a bank plan. Use `-bank` to get started.")
-    
+
     if bank_data["deposited"] == 0:
         return await ctx.send("❌ You don't have any coins deposited to earn interest.")
-    
-    current_time = time.time()
-    last_claim = bank_data.get("last_interest_claim", 0)
-    
-    # Check if 24h cooldown has passed
-    if current_time - last_claim < 86400:
-        remaining = 86400 - (current_time - last_claim)
-        hours = int(remaining // 3600)
-        minutes = int((remaining % 3600) // 60)
-        return await ctx.send(f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!")
-    
-    # Calculate how many full days passed since last claim
-   # Calculate how many full days passed since last claim
-    if "last_interest_claim" not in bank_data:
-        days_passed = 1
-    else:
-        days_passed = min(30, int((current_time - last_claim) / 86400))
-        if days_passed < 1:
-            days_passed = 1
 
-    
-    # Calculate COMPOUNDED interest for all missed days
-    interest_rate = BANK_PLANS[bank_data["plan"]]["interest"]
-    principal = bank_data["deposited"]
-    total_interest = 0
-    
-    for _ in range(days_passed):
-        daily_interest = principal * interest_rate
-        total_interest += daily_interest
-        principal += daily_interest  # Compounding effect
-    
-    # Update bank data
-    bank_data["deposited"] = principal  # Update with compounded amount
-    bank_data["last_interest_claim"] = current_time
-    update_bank_data(user_id, bank_data)
-    
-    await ctx.send(
-        f"💰 **+{int(total_interest):,} coins** (Interest over {days_passed} day{'s' if days_passed > 1 else ''})\n"
-        f"🏦 New deposited amount: **{int(principal):,} coins**"
-    )
+    view = InterestView(ctx, user_id)
+    await view.initialize()
+    message = await ctx.send(embed=view.create_embed(), view=view)
+    view.message = message  # For timeout edits
+
+class InterestView(discord.ui.View):
+    def __init__(self, ctx, user_id):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.user_id = user_id
+        self.bank_data = None
+        self.claimed = False
+        self.days_passed = 1
+        self.total_interest = 0
+        self.total_return_percent = 0
+        self.message = None
+
+    async def initialize(self):
+        self.bank_data = get_bank_data(self.user_id)
+
+    def create_embed(self):
+        deposited = int(self.bank_data["deposited"])
+        plan = self.bank_data["plan"]
+        rate = BANK_PLANS[plan]["interest"] * 100 if plan else 0
+
+        embed = discord.Embed(
+            title="💰 Interest Summary",
+            color=discord.Color.green()
+        )
+        embed.set_author(name=self.ctx.author.display_name, icon_url=self.ctx.author.avatar.url if self.ctx.author.avatar else discord.Embed.Empty)
+
+        embed.add_field(name="Deposited", value=f"**{deposited:,} coins**", inline=False)
+        embed.add_field(name="Daily Interest Rate", value=f"**{rate:.2f}%**", inline=False)
+
+        if self.claimed:
+            embed.add_field(name="Days Passed", value=f"**{self.days_passed}**", inline=False)
+            embed.add_field(name="Total Interest Gained", value=f"**+{int(self.total_interest):,} coins**", inline=False)
+            embed.add_field(name="New Balance", value=f"**{int(deposited):,} coins**", inline=False)
+            embed.add_field(name="Effective Total Return", value=f"**{self.total_return_percent:.2f}%**", inline=False)
+            embed.set_footer(text="✅ Interest successfully claimed!")
+        else:
+            embed.set_footer(text="Click below to claim your interest.")
+
+        return embed
+
+    @discord.ui.button(label="Claim Interest", style=discord.ButtonStyle.green)
+    async def claim_interest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ You can't claim interest for someone else.", ephemeral=True)
+
+        current_time = time.time()
+        last_claim = self.bank_data.get("last_interest_claim")
+
+        if last_claim:
+            time_diff = current_time - last_claim
+            if time_diff < 86400:
+                remaining = 86400 - time_diff
+                hours = int(remaining // 3600)
+                minutes = int((remaining % 3600) // 60)
+                return await interaction.response.send_message(
+                    f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!",
+                    ephemeral=True
+                )
+
+            self.days_passed = min(30, max(1, int(time_diff // 86400)))
+        else:
+            self.days_passed = 1
+
+        # Interest Calculation
+        rate = BANK_PLANS[self.bank_data["plan"]]["interest"]
+        base = self.bank_data["deposited"]
+        principal = base
+        total = 0
+
+        for _ in range(self.days_passed):
+            interest = principal * rate
+            total += interest
+            principal += interest
+
+        self.bank_data["deposited"] = principal
+        self.bank_data["last_interest_claim"] = current_time
+        update_bank_data(self.user_id, self.bank_data)
+
+        self.claimed = True
+        self.total_interest = total
+        self.total_return_percent = (total / base) * 100 if base else 0
+
+        button.disabled = True
+        await interaction.response.edit_message(embed=self.create_embed(), view=self)
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except discord.NotFound:
+                pass
+
+
+
 
 @bot.command()
 async def bank(ctx):
