@@ -112,16 +112,17 @@ def set_balance(user_id, amount):
 
 def load_currency_stocks():
     try:
-        with open(CURRENCY_STOCKS_FILE, "r") as f:
+        with open("currency_stocks.json", "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        stocks = {"BobBux": 10000, "DxBux": 10000, "Gold": 10000}
+        stocks = {"BobBux": 20000, "DxBux": 20000, "Gold": 20000}
         save_currency_stocks(stocks)
         return stocks
 
 def save_currency_stocks(stocks):
-    with open(CURRENCY_STOCKS_FILE, "w") as f:
+    with open("currency_stocks.json", "w") as f:
         json.dump(stocks, f)
+
 
 def load_currency_prices():
     try:
@@ -1219,16 +1220,21 @@ async def stock(ctx):
     )
     
     prices = load_currency_prices()
-    
+    stocks = load_currency_stocks()
+
     for currency in ["BobBux", "DxBux", "Gold"]:
         embed.add_field(
             name=f"{currency}",
-            value=f"Price: {prices[currency]} coins",
+            value=(
+                f"Price: {prices[currency]} coins\n"
+                f"Supply Left: {stocks[currency]:,}"
+            ),
             inline=True
         )
-    
-    embed.set_footer(text=f"Your balance: {get_balance(ctx.author.id)} coins")
+
+    embed.set_footer(text=f"Your balance: {get_balance(ctx.author.id):,} coins")
     view.message = await ctx.send(embed=embed, view=view)
+
 
 class StockMarketView(discord.ui.View):
     def __init__(self, user_id: int):
@@ -1327,61 +1333,60 @@ class StockMarketView(discord.ui.View):
         try:
             if interaction.user.id != self.user_id:
                 return await interaction.response.send_message("❌ This menu isn't for you!", ephemeral=True)
-        
+    
             await interaction.response.defer()
             self.currency = interaction.data['values'][0]
-        
-            # Update amount options based on available funds/inventory
+
             user_balance = get_balance(self.user_id)
             user_inv = get_inventory(self.user_id)
             prices = load_currency_prices()
-        
+            stocks = load_currency_stocks()
+
             if self.action == "buy":
-                max_affordable = user_balance // prices[self.currency]
+                price = prices[self.currency]
+                max_by_balance = user_balance // price
+                max_by_stock = stocks.get(self.currency, 0)
+                max_affordable = min(max_by_balance, max_by_stock)
             else:  # sell
                 max_affordable = user_inv.get(self.currency, 0)
-        
-            # Update amount dropdown options
+    
             self.amount_dropdown.options = []
-            amounts = [1, 5, 10, 25, 50, 100]  # Standard amount options
-        
-            # Add standard amounts that are affordable
-            for amount in amounts:
-                if amount <= max_affordable:
+            standard_amounts = [1, 5, 10, 25, 50, 100]
+    
+            for amt in standard_amounts:
+                if amt <= max_affordable:
                     self.amount_dropdown.options.append(
-                        discord.SelectOption(label=str(amount), value=str(amount))
-                    )  # Properly closed now
-            
-            # Add "Max" option if applicable
-            if max_affordable > 0 and (max_affordable > 100 or max_affordable not in amounts):
+                        discord.SelectOption(label=str(amt), value=str(amt))
+                    )
+    
+            if max_affordable > 0 and (max_affordable not in standard_amounts or max_affordable > 100):
                 self.amount_dropdown.options.append(
                     discord.SelectOption(label=f"Max ({max_affordable})", value="max")
                 )
-            
-            # Rest of the method remains the same...
+
             if self.amount_dropdown.options:
                 self.amount_dropdown.disabled = False
-                self.amount = int(self.amount_dropdown.options[0].value)
+                self.amount = int(self.amount_dropdown.options[0].value) if self.amount_dropdown.options[0].value.isdigit() else 0
             else:
                 self.amount_dropdown.disabled = True
                 self.amount = 0
                 await interaction.followup.send(
-                    "⚠️ You don't have enough funds/inventory for this currency!",
+                    "⚠️ You can't afford or don't have any of this currency!",
                     ephemeral=True
                 )
-        
+
             self.confirm_button.disabled = True
             await interaction.edit_original_response(view=self)
             await interaction.followup.send(
                 f"Selected currency: **{self.currency}**",
                 ephemeral=True
             )
-        
+
         except Exception as e:
             print(f"Error in currency_select: {e}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ An error occurred. Please try again.",
+                    "❌ An error occurred while selecting currency.",
                     ephemeral=True
                 )
     
