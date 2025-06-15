@@ -1866,11 +1866,7 @@ async def cf(ctx, amount: int):
 async def bal(ctx, member: discord.Member = None):
     member = member or ctx.author
     view = BalanceView(member.id, ctx)
-    await view.initialize()  # <-- Fetch member first
-    await view.send_initial_message(ctx)
-    
-    # Create the view with balance toggles
-    view = BalanceView(user_id, ctx)
+    await view.initialize()
     await view.send_initial_message(ctx)
 
 class BalanceView(discord.ui.View):
@@ -1878,11 +1874,11 @@ class BalanceView(discord.ui.View):
         super().__init__(timeout=60)
         self.user_id = user_id
         self.ctx = ctx
-        self.member = None  # We'll store the member here
+        self.member = None
         self.current_mode = "wallet"
         self.message = None
 
-    async def initialize(self):  # <-- New async setup method
+    async def initialize(self):
         self.member = self.ctx.guild.get_member(self.user_id)
         if not self.member:
             try:
@@ -1890,15 +1886,24 @@ class BalanceView(discord.ui.View):
             except discord.NotFound:
                 self.member = await bot.fetch_user(self.user_id)
 
-    def create_embed(self):  # <-- Now stays synchronous
+    async def send_initial_message(self, ctx):
+        embed = self.create_embed()
+        self.message = await ctx.send(embed=embed, view=self)
+
+    def create_embed(self):
+        # Dummy data - replace with actual data fetching
+        balance = get_balance(self.user_id)
+        bank_data = get_bank_data(self.user_id)
+        inventory = get_inventory(self.user_id)
+
         embed = discord.Embed(color=discord.Color.blue())
-        avatar_url = self.member.avatar.url if hasattr(self.member, 'avatar') else self.member.default_avatar.url
+
+        avatar_url = getattr(self.member.avatar, "url", self.member.default_avatar.url)
         embed.set_author(name=f"{self.member.display_name}'s Balance", icon_url=avatar_url)
 
         if self.current_mode == "wallet":
             embed.title = "💰 Wallet Balance"
             embed.description = f"**{balance:,} coins**"
-            
             loan_data = get_loan(self.user_id)
             if loan_data and not loan_data["repaid"]:
                 due_date = datetime.fromtimestamp(loan_data["due_date"])
@@ -1907,34 +1912,33 @@ class BalanceView(discord.ui.View):
                     value=f"{loan_data['amount']:,} coins (due {due_date.strftime('%Y-%m-%d')})",
                     inline=False
                 )
-    
         elif self.current_mode == "bank":
-            plan_name = BANK_PLANS[bank_data['plan']]['name'] if bank_data['plan'] else 'No plan'
+            plan = bank_data['plan']
+            plan_name = BANK_PLANS[plan]['name'] if plan else 'No plan'
+            interest = BANK_PLANS[plan]['interest'] * 100 if plan else 0
             embed.title = "🏦 Bank Balance"
             embed.description = (
                 f"**{bank_data['deposited']:,} coins**\n"
                 f"*Plan: {plan_name}*\n"
-                f"*Interest: {BANK_PLANS[bank_data['plan']]['interest'] * 100 if bank_data['plan'] else 0}% daily*"  # FIXED
+                f"*Interest: {interest}% daily*"
             )
-    
         elif self.current_mode == "currency":
-            embed.title = "💎 Currency Holdings"
             prices = load_currency_prices()
+            embed.title = "💎 Currency Holdings"
             for currency in ["BobBux", "DxBux", "Gold"]:
                 value = inventory.get(currency, 0)
                 embed.add_field(
                     name=currency,
-                    value=f"Amount: **{value:,}**\nValue: **{value*prices[currency]:,} coins**",
+                    value=f"Amount: **{value:,}**\nValue: **{value * prices[currency]:,} coins**",
                     inline=True
                 )
-    
+
         return embed
-    
+
     @discord.ui.button(label="Wallet", style=discord.ButtonStyle.primary, custom_id="wallet", row=0)
     async def wallet_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ This isn't your balance!", ephemeral=True)
-        
         self.current_mode = "wallet"
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
@@ -1942,7 +1946,6 @@ class BalanceView(discord.ui.View):
     async def bank_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ This isn't your balance!", ephemeral=True)
-        
         self.current_mode = "bank"
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
@@ -1950,12 +1953,10 @@ class BalanceView(discord.ui.View):
     async def currency_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
             return await interaction.response.send_message("❌ This isn't your balance!", ephemeral=True)
-        
         self.current_mode = "currency"
         await interaction.response.edit_message(embed=self.create_embed(), view=self)
 
     async def on_timeout(self):
-        """Disable buttons when view times out"""
         for item in self.children:
             item.disabled = True
         if self.message:
@@ -1963,6 +1964,9 @@ class BalanceView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.NotFound:
                 pass
+
+
+
 @bot.command(aliases=["lb"])
 async def leaderboard(ctx, type: str = "wallet"):
     """Show the wealth leaderboard (wallet, bank, or total)"""
