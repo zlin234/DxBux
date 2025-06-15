@@ -693,10 +693,14 @@ async def interest(ctx):
     if bank_data["deposited"] == 0:
         return await ctx.send("❌ You don't have any coins deposited to earn interest.")
 
+    # Important: Create the view and initialize before sending
     view = InterestView(ctx, user_id)
     await view.initialize()
+
+    # Send message WITH the view attached
     message = await ctx.send(embed=view.create_embed(), view=view)
-    view.message = message  # For timeout edits
+    view.message = message
+
 
 class InterestView(discord.ui.View):
     def __init__(self, ctx, user_id):
