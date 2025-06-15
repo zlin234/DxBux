@@ -1869,13 +1869,14 @@ async def bal(ctx, member: discord.Member = None):
     user_id = member.id
     
     # Create the view with balance toggles
-    view = BalanceView(user_id)
+    view = BalanceView(user_id, ctx)
     await view.send_initial_message(ctx)
 
 class BalanceView(discord.ui.View):
-    def __init__(self, user_id: int):
+    def __init__(self, user_id: int, ctx):
         super().__init__(timeout=60)
         self.user_id = user_id
+        self.ctx = ctx
         self.current_mode = "wallet"  # wallet/bank/currency
         self.message = None
 
@@ -1883,16 +1884,16 @@ class BalanceView(discord.ui.View):
         """Send the initial balance message"""
         embed = self.create_embed()
         self.message = await ctx.send(embed=embed, view=self)
-    
+
     def create_embed(self):
-        """Create an embed based on current view mode"""
         balance = get_balance(self.user_id)
         bank_data = get_bank_data(self.user_id)
         inventory = get_inventory(self.user_id)
         
         embed = discord.Embed(color=discord.Color.blue())
-        embed.set_author(name=f"{ctx.guild.get_member(self.user_id).display_name}'s Balance", 
-                        icon_url=ctx.guild.get_member(self.user_id).avatar.url)
+        member = self.ctx.guild.get_member(self.user_id)  # <-- Use stored ctx
+        embed.set_author(name=f"{member.display_name}'s Balance", 
+                        icon_url=member.avatar.url)
 
         if self.current_mode == "wallet":
             embed.title = "💰 Wallet Balance"
