@@ -681,9 +681,9 @@ async def withdraw(ctx, amount: int):
         f"• Bank balance: **{bank_data['deposited']} coins**"
     )
 
+
 @bot.command()
 async def interest(ctx):
-    """Claim your accumulated interest (24h cooldown)"""
     user_id = ctx.author.id
     bank_data = get_bank_data(user_id)
 
@@ -693,16 +693,12 @@ async def interest(ctx):
     if bank_data["deposited"] == 0:
         return await ctx.send("❌ You don't have any coins deposited to earn interest.")
 
-    # Important: Create the view and initialize before sending
     view = InterestView(ctx, user_id)
     await view.initialize()
 
-    # Send message WITH the view attached
     message = await ctx.send(embed=view.create_embed(), view=view)
     view.message = message
 
-
-class InterestView(discord.ui.View):
     def __init__(self, ctx, user_id):
         super().__init__(timeout=60)
         self.ctx = ctx
@@ -722,11 +718,9 @@ class InterestView(discord.ui.View):
         plan = self.bank_data["plan"]
         rate = BANK_PLANS[plan]["interest"] * 100 if plan else 0
 
-        embed = discord.Embed(
-            title="💰 Interest Summary",
-            color=discord.Color.green()
-        )
-        embed.set_author(name=self.ctx.author.display_name, icon_url=self.ctx.author.avatar.url if self.ctx.author.avatar else discord.Embed.Empty)
+        embed = discord.Embed(title="💰 Interest Summary", color=discord.Color.green())
+        embed.set_author(name=self.ctx.author.display_name,
+                         icon_url=self.ctx.author.display_avatar.url)
 
         embed.add_field(name="Deposited", value=f"**{deposited:,} coins**", inline=False)
         embed.add_field(name="Daily Interest Rate", value=f"**{rate:.2f}%**", inline=False)
@@ -734,7 +728,7 @@ class InterestView(discord.ui.View):
         if self.claimed:
             embed.add_field(name="Days Passed", value=f"**{self.days_passed}**", inline=False)
             embed.add_field(name="Total Interest Gained", value=f"**+{int(self.total_interest):,} coins**", inline=False)
-            embed.add_field(name="New Balance", value=f"**{int(deposited):,} coins**", inline=False)
+            embed.add_field(name="New Balance", value=f"**{int(self.bank_data['deposited']):,} coins**", inline=False)
             embed.add_field(name="Effective Total Return", value=f"**{self.total_return_percent:.2f}%**", inline=False)
             embed.set_footer(text="✅ Interest successfully claimed!")
         else:
@@ -745,27 +739,22 @@ class InterestView(discord.ui.View):
     @discord.ui.button(label="Claim Interest", style=discord.ButtonStyle.green)
     async def claim_interest(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.user_id:
-            return await interaction.response.send_message("❌ You can't claim interest for someone else.", ephemeral=True)
+            return await interaction.response.send_message("❌ This isn't your interest panel.", ephemeral=True)
 
         current_time = time.time()
         last_claim = self.bank_data.get("last_interest_claim")
 
-        if last_claim:
-            time_diff = current_time - last_claim
-            if time_diff < 86400:
-                remaining = 86400 - time_diff
-                hours = int(remaining // 3600)
-                minutes = int((remaining % 3600) // 60)
-                return await interaction.response.send_message(
-                    f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!",
-                    ephemeral=True
-                )
+        if last_claim and current_time - last_claim < 86400:
+            remaining = 86400 - (current_time - last_claim)
+            hours = int(remaining // 3600)
+            minutes = int((remaining % 3600) // 60)
+            return await interaction.response.send_message(
+                f"⌛ Come back in **{hours}h {minutes}m** to claim more interest!",
+                ephemeral=True
+            )
 
-            self.days_passed = min(30, max(1, int(time_diff // 86400)))
-        else:
-            self.days_passed = 1
+        self.days_passed = max(1, min(30, int((current_time - last_claim) // 86400))) if last_claim else 1
 
-        # Interest Calculation
         rate = BANK_PLANS[self.bank_data["plan"]]["interest"]
         base = self.bank_data["deposited"]
         principal = base
@@ -776,7 +765,7 @@ class InterestView(discord.ui.View):
             total += interest
             principal += interest
 
-        self.bank_data["deposited"] = principal
+        self.bank_data["deposited"] = int(principal)
         self.bank_data["last_interest_claim"] = current_time
         update_bank_data(self.user_id, self.bank_data)
 
@@ -795,9 +784,6 @@ class InterestView(discord.ui.View):
                 await self.message.edit(view=self)
             except discord.NotFound:
                 pass
-
-
-
 
 @bot.command()
 async def bank(ctx):
