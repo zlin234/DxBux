@@ -108,6 +108,12 @@ def set_balance(user_id, amount):
     balances[str(user_id)] = amount
     save_balances(balances)
 
+def update_balance(user_id: int, amount: int):
+    balances = load_balances()
+    balances[str(user_id)] = balances.get(str(user_id), 0) + amount
+    save_balances(balances)
+
+
 # ------------------ STOCK MANAGEMENT ------------------
 
 def load_currency_stocks():
