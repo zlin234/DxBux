@@ -609,6 +609,273 @@ async def donate(ctx, member: discord.Member, amount: int):
     await ctx.send(f"✅ {ctx.author.mention} donated {amount} coins to {member.mention}!")
 
 
+# ------------------ TRADING ------------------
+
+
+@bot.command()
+async def trade(ctx, member: discord.Member):
+    if member.id == ctx.author.id:
+        return await ctx.send("You can't trade with yourself.")
+    await ctx.send(f"{ctx.author.mention} is starting a trade with {member.mention}...")
+    await ctx.send("Please select what you want to offer:", view=TradeOfferView(ctx.author, member))
+
+
+# --- Trade UI ---
+
+class TradeOfferView(discord.ui.View):
+    def __init__(self, initiator, recipient):
+        super().__init__(timeout=120)
+        self.initiator = initiator
+        self.recipient = recipient
+        self.offered_items = {}  # item_name: quantity
+        self.offered_coins = 0
+
+    @discord.ui.select(
+        placeholder="Select items to offer", min_values=1, max_values=5,
+        options=[
+            discord.SelectOption(label="BobBux", value="BobBux"),
+            discord.SelectOption(label="DxBux", value="DxBux"),
+            discord.SelectOption(label="Gold", value="Gold"),
+            discord.SelectOption(label="Phone", value="Phone"),
+            discord.SelectOption(label="Padlock", value="Padlock"),
+        ]
+    )
+    async def select_items(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("You can't modify this trade.", ephemeral=True)
+
+        # Set default quantity = 1 for all selected items
+        self.offered_items = {item: 1 for item in select.values}
+        await interaction.response.send_message(
+            f"Selected items: {', '.join(select.values)}. Use 'Set Quantities' button to edit amounts.",
+            ephemeral=True
+        )
+
+    @discord.ui.button(label="Set Quantities", style=discord.ButtonStyle.primary)
+    async def set_quantities(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("You can't modify this trade.", ephemeral=True)
+
+        if not self.offered_items:
+            return await interaction.response.send_message("Please select items first.", ephemeral=True)
+
+        # Open modal with inputs for each selected item
+        await interaction.response.send_modal(SetQuantitiesModal(self))
+
+
+    @discord.ui.button(label="Add Coins", style=discord.ButtonStyle.blurple)
+    async def add_coins(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("You can't modify this trade.", ephemeral=True)
+        await interaction.response.send_modal(CoinModal(self))
+
+    @discord.ui.button(label="Confirm Offer", style=discord.ButtonStyle.success)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("You can't confirm this trade.", ephemeral=True)
+
+        # Optionally verify quantities > 0
+        for qty in self.offered_items.values():
+            if qty <= 0:
+                return await interaction.response.send_message("Quantities must be positive.", ephemeral=True)
+
+        await interaction.message.edit(content="What do you want in return from the recipient?", view=TradeRequestView(
+            self.initiator, self.recipient, self.offered_items, self.offered_coins
+        ))
+
+class SetQuantitiesModal(discord.ui.Modal, title="Set Quantities for Offered Items"):
+    def __init__(self, trade_view: TradeOfferView):
+        super().__init__()
+        self.trade_view = trade_view
+
+        # Dynamically create a TextInput for each item selected
+        for item in self.trade_view.offered_items.keys():
+            default_value = str(self.trade_view.offered_items[item])
+            self.add_item(
+                discord.ui.TextInput(
+                    label=f"Quantity for {item}",
+                    default=default_value,
+                    placeholder="Enter quantity",
+                    required=True,
+                    style=discord.TextStyle.short,
+                    max_length=5
+                )
+            )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Read quantities from text inputs, validate and update
+        new_quantities = {}
+        try:
+            for item, text_input in zip(self.trade_view.offered_items.keys(), self.children):
+                val = int(text_input.value)
+                if val <= 0:
+                    raise ValueError(f"Quantity for {item} must be positive")
+                new_quantities[item] = val
+        except ValueError as e:
+            return await interaction.response.send_message(str(e), ephemeral=True)
+
+        self.trade_view.offered_items = new_quantities
+        await interaction.response.send_message(
+            f"Updated quantities: {', '.join(f'{k}: {v}' for k,v in new_quantities.items())}",
+            ephemeral=True
+        )
+
+
+class CoinModal(discord.ui.Modal, title="Enter coins to offer"):
+    amount = discord.ui.TextInput(label="Coins", placeholder="Amount to offer", required=True)
+
+    def __init__(self, view_ref):
+        super().__init__()
+        self.view_ref = view_ref
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(self.amount.value)
+            if value <= 0:
+                raise ValueError
+            balance = get_balance(self.view_ref.initiator.id)
+            if value > balance:
+                return await interaction.response.send_message("You don't have enough coins.", ephemeral=True)
+            self.view_ref.offered_coins = value
+            await interaction.response.send_message(f"Offering {value} coins.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Enter a valid positive number.", ephemeral=True)
+
+
+class TradeRequestView(discord.ui.View):
+    def __init__(self, initiator, recipient, offered_items, offered_coins):
+        super().__init__(timeout=120)
+        self.initiator = initiator
+        self.recipient = recipient
+        self.offered_items = offered_items
+        self.offered_coins = offered_coins
+        self.requested_items = {}
+        self.requested_coins = 0
+
+    @discord.ui.select(
+        placeholder="What do you want in return?", min_values=1, max_values=5,
+        options=[
+            discord.SelectOption(label="BobBux"),
+            discord.SelectOption(label="DxBux"),
+            discord.SelectOption(label="Gold"),
+            discord.SelectOption(label="Phone"),
+            discord.SelectOption(label="Padlock"),
+        ]
+    )
+    async def want_items(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("You can't modify this trade.", ephemeral=True)
+
+        self.requested_items = {item: 1 for item in select.values}
+        await interaction.response.send_message(f"Requested: {', '.join(select.values)} (default 1)", ephemeral=True)
+
+    @discord.ui.button(label="Request Coins", style=discord.ButtonStyle.blurple)
+    async def request_coins(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("You can't modify this trade.", ephemeral=True)
+        await interaction.response.send_modal(RequestCoinModal(self))
+
+    @discord.ui.button(label="Send Trade Request", style=discord.ButtonStyle.success)
+    async def send(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.initiator:
+            return await interaction.response.send_message("Only the initiator can send this trade.", ephemeral=True)
+
+        embed = discord.Embed(
+            title="Trade Offer",
+            description=f"{self.initiator.mention} wants to trade with you.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="They offer", value=f"{self.offered_items} + {self.offered_coins} coins", inline=False)
+        embed.add_field(name="They want", value=f"{self.requested_items} + {self.requested_coins} coins", inline=False)
+
+        view = TradeAcceptView(
+            self.initiator, self.recipient,
+            self.offered_items, self.offered_coins,
+            self.requested_items, self.requested_coins
+        )
+
+        await interaction.channel.send(
+            f"{self.recipient.mention}, you have a new trade request!",
+            embed=embed,
+            view=view
+        )
+
+
+class RequestCoinModal(discord.ui.Modal, title="Enter coins to request"):
+    amount = discord.ui.TextInput(label="Coins", placeholder="Amount to request", required=True)
+
+    def __init__(self, view_ref):
+        super().__init__()
+        self.view_ref = view_ref
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            value = int(self.amount.value)
+            if value <= 0:
+                raise ValueError
+            self.view_ref.requested_coins = value
+            await interaction.response.send_message(f"Requesting {value} coins.", ephemeral=True)
+        except ValueError:
+            await interaction.response.send_message("Enter a valid positive number.", ephemeral=True)
+
+
+class TradeAcceptView(discord.ui.View):
+    def __init__(self, user1, user2, offer1_items, offer1_coins, want_items, want_coins):
+        super().__init__(timeout=60)
+        self.user1 = user1
+        self.user2 = user2
+        self.offer1_items = offer1_items
+        self.offer1_coins = offer1_coins
+        self.want_items = want_items
+        self.want_coins = want_coins
+
+    @discord.ui.button(label="Accept ✅", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user2:
+            return await interaction.response.send_message("You're not the recipient!", ephemeral=True)
+
+        inv1 = get_inventory(self.user1.id)
+        inv2 = get_inventory(self.user2.id)
+        bal1 = get_balance(self.user1.id)
+        bal2 = get_balance(self.user2.id)
+
+        for item, qty in self.offer1_items.items():
+            if inv1.get(item, 0) < qty:
+                return await interaction.response.send_message("Initiator doesn't have enough items.", ephemeral=True)
+
+        for item, qty in self.want_items.items():
+            if inv2.get(item, 0) < qty:
+                return await interaction.response.send_message("Recipient doesn't have requested items.", ephemeral=True)
+
+        if bal1 < self.offer1_coins or bal2 < self.want_coins:
+            return await interaction.response.send_message("Not enough coins for the trade.", ephemeral=True)
+
+        # Execute item trade
+        for item, qty in self.offer1_items.items():
+            inv1[item] -= qty
+            inv2[item] = inv2.get(item, 0) + qty
+
+        for item, qty in self.want_items.items():
+            inv2[item] -= qty
+            inv1[item] = inv1.get(item, 0) + qty
+
+        # Execute coin trade
+        update_balance(self.user1.id, -self.offer1_coins)
+        update_balance(self.user2.id, self.offer1_coins)
+        update_balance(self.user2.id, -self.want_coins)
+        update_balance(self.user1.id, self.want_coins)
+
+        save_inventories({str(self.user1.id): inv1, str(self.user2.id): inv2})
+        await interaction.message.edit(content="✅ Trade completed successfully!", view=None)
+
+    @discord.ui.button(label="Decline ❌", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.user2:
+            return await interaction.response.send_message("You're not the recipient!", ephemeral=True)
+        await interaction.message.edit(content="❌ Trade was declined.", view=None)
+
+
+
 # ------------------ BANK COMMANDS ------------------
 
 class BankPlanView(discord.ui.View):
