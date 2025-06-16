@@ -136,18 +136,56 @@ def save_currency_prices(prices):
     with open(CURRENCY_PRICES_FILE, "w") as f:
         json.dump(prices, f)
 
-def update_currency_price(currency_name, amount_purchased):
+def update_currency_price(currency_name: str, amount: int, is_buy: bool) -> int:
+    """Update currency price based on market activity"""
     prices = load_currency_prices()
     stocks = load_currency_stocks()
     
-    price_increase_percent = (amount_purchased / stocks[currency_name]) * 100
-    price_increase = prices[currency_name] * (price_increase_percent / 100)
-    prices[currency_name] = int(prices[currency_name] + max(price_increase, prices[currency_name] * 0.01))
-    save_currency_prices(prices)
+    current_price = prices[currency_name]
+    current_stock = stocks[currency_name]
     
-    stocks[currency_name] -= amount_purchased
+    if is_buy:
+        # When buying - price increases based on percentage of stock purchased
+        if current_stock > 0:
+            purchase_percent = (amount / current_stock) * 100
+            # Price increases by purchase percentage (capped at 20% increase)
+            price_increase = min(purchase_percent, 20)
+            new_price = current_price * (1 + (price_increase / 100))
+        else:
+            # If stock is empty, apply a standard 10% increase
+            new_price = current_price * 1.10
+        
+        # Ensure at least 1% increase
+        new_price = max(new_price, current_price * 1.01)
+        
+        # Reduce available stock
+        stocks[currency_name] -= amount
+    else:
+        # When selling - price decreases based on percentage of stock sold
+        total_stock = stocks[currency_name] + amount  # Stock before selling
+        if total_stock > 0:
+            sale_percent = (amount / total_stock) * 100
+            # Price decreases by sale percentage (capped at 15% decrease)
+            price_decrease = min(sale_percent, 15)
+            new_price = current_price * (1 - (price_decrease / 100))
+        else:
+            # Shouldn't happen, but just in case
+            new_price = current_price * 0.95
+        
+        # Ensure at least 1% decrease
+        new_price = min(new_price, current_price * 0.99)
+        
+        # Increase available stock
+        stocks[currency_name] += amount
+    
+    # Round to nearest integer and ensure minimum price of 1
+    new_price = max(1, int(round(new_price)))
+    
+    prices[currency_name] = new_price
+    save_currency_prices(prices)
     save_currency_stocks(stocks)
-    return prices[currency_name]
+    
+    return new_price
 
 def load_inventories():
     try:
@@ -1272,7 +1310,7 @@ class StockMarketView(discord.ui.View):
     
         if not self.action or not self.currency or not self.amount:
             return await interaction.response.send_message("Please complete all selections before confirming.", ephemeral=True)
-
+    
         prices = load_currency_prices()
         stocks = load_currency_stocks()
         user_balance = get_balance(self.user_id)
@@ -1290,31 +1328,30 @@ class StockMarketView(discord.ui.View):
             if amount > stock:
                 return await interaction.response.send_message("Not enough stock available.", ephemeral=True)
 
-            # Buy logic
+            # Buy logic with price update
+            new_price = update_currency_price(currency, amount, is_buy=True)
             set_balance(self.user_id, user_balance - total_price)
             user_inv[currency] = user_inv.get(currency, 0) + amount
-            stocks[currency] -= amount
-            update_currency_price(currency, amount)
 
         elif self.action == "sell":
             if user_inv.get(currency, 0) < amount:
                 return await interaction.response.send_message("You don't have enough to sell.", ephemeral=True)
 
-            # Sell logic
-            set_balance(self.user_id, user_balance + total_price)
+            # Sell logic with price update
+            new_price = update_currency_price(currency, amount, is_buy=False)
+            set_balance(self.user_id, user_balance + (price * amount))
             user_inv[currency] -= amount
-            stocks[currency] += amount
-            # Optional: You can reduce price on sell, but not done here
 
         # Save results
         inventories = load_inventories()
         inventories[str(self.user_id)] = user_inv
-        with open(INVENTORY_FILE, "w") as f:
-            json.dump(inventories, f, indent=4)
+        save_inventories(inventories)
 
-        save_currency_stocks(stocks)
-
-        await interaction.response.send_message(f"✅ You **{self.action}ed** {amount} {currency} for {total_price} coins.", ephemeral=True)
+        await interaction.response.send_message(
+            f"✅ You {self.action}ed {amount} {currency} for {total_price} coins.\n"
+            f"New {currency} price: {new_price} coins (was {price})",
+            ephemeral=True
+        )
         await self.update_message()
 
 
