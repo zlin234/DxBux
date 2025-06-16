@@ -609,6 +609,69 @@ async def donate(ctx, member: discord.Member, amount: int):
     await ctx.send(f"✅ {ctx.author.mention} donated {amount} coins to {member.mention}!")
 
 
+# ------------------ TRADING ------------------
+
+def update_trade_balances(user1_id, user2_id, offer1, offer2):
+    inv = load_inventories()
+
+    for item, qty in offer1.items():
+        inv[str(user1_id)][item] -= qty
+        inv[str(user2_id)][item] = inv[str(user2_id)].get(item, 0) + qty
+
+    for item, qty in offer2.items():
+        inv[str(user2_id)][item] -= qty
+        inv[str(user1_id)][item] = inv[str(user1_id)].get(item, 0) + qty
+
+    save_inventories(inv)
+
+
+@bot.command()
+async def trade(ctx, member: discord.Member):
+    if member.id == ctx.author.id:
+        return await ctx.send("You can't trade with yourself.")
+    
+    # Load both inventories
+    user_inv = get_inventory(ctx.author.id)
+    target_inv = get_inventory(member.id)
+
+    # Create a TradeSession object (or View) to hold both sides
+    view = TradeView(ctx.author, member)
+    await ctx.send(f"{ctx.author.mention} is initiating a trade with {member.mention}", view=view)
+
+class TradeView(discord.ui.View):
+    def __init__(self, user1, user2):
+        super().__init__(timeout=300)
+        self.user1 = user1
+        self.user2 = user2
+        self.offer1 = {}
+        self.offer2 = {}
+        self.confirmed1 = False
+        self.confirmed2 = False
+
+    @discord.ui.button(label="Offer BobBux", style=discord.ButtonStyle.primary)
+    async def offer_bobbux(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user not in [self.user1, self.user2]:
+            return await interaction.response.send_message("You're not part of this trade.", ephemeral=True)
+
+        # Collect amount with modal or another UI step
+        await interaction.response.send_message("How much BobBux to offer?", ephemeral=True)
+        # Save amount to self.offer1 or self.offer2 depending on user
+
+    @discord.ui.button(label="Confirm Trade ✅", style=discord.ButtonStyle.success)
+    async def confirm_trade(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user == self.user1:
+            self.confirmed1 = True
+        elif interaction.user == self.user2:
+            self.confirmed2 = True
+
+        if self.confirmed1 and self.confirmed2:
+            # Validate, update inventories, and confirm trade
+            update_trade_balances(self.user1.id, self.user2.id, self.offer1, self.offer2)
+            await interaction.response.edit_message(content="✅ Trade completed!", view=None)
+        else:
+            await interaction.response.send_message("Waiting for the other user to confirm...", ephemeral=True)
+
+
 # ------------------ BANK COMMANDS ------------------
 
 class BankPlanView(discord.ui.View):
