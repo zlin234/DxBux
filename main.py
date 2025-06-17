@@ -1189,6 +1189,15 @@ def load_shop_items():
                 "description": "Call police to arrest recent robbers (last 5 minutes)",
                 "max_stack": 1,
                 "usable": True
+            },
+            "midas_touch": {
+                "name": "Midas's Touch",
+                "price": 5000,
+                "description": "Turns 100 coins into 100 gold every 5 minutes (limited edition)",
+                "max_stack": 1,
+                "usable": False,
+                "limited_edition": True,
+                "available_until": time.time() + 3600  # Available for 1 hour after launch
             }
         }
         save_shop_items(shop_items)
@@ -1197,6 +1206,7 @@ def load_shop_items():
     for item_id, item_data in shop_items.items():
         item_data.setdefault("usable", False)
         item_data.setdefault("max_stack", 1)
+        item_data.setdefault("limited_edition", False)
     
     return shop_items
 
@@ -1367,23 +1377,45 @@ class ShopBuyButton(discord.ui.Button):
             f"✅ Purchased {quantity}x {self.item_data['name']} for {total_price} coins!", ephemeral=True
         )
 
+
 @bot.command()
 async def shop(ctx):
     """View and buy items from the shop with quantity selection"""
     shop_items = load_shop_items()
+    current_time = time.time()
+    
+    # Filter out limited edition items that are expired
+    available_items = {
+        k: v for k, v in shop_items.items() 
+        if not v.get("limited_edition", False) or v.get("available_until", 0) > current_time
+    }
+    
     await ctx.send(embed=discord.Embed(
         title="🛒 Shop",
         description="Select a quantity then press Buy!",
         color=discord.Color.green()
     ))
 
-    for item_id, item_data in shop_items.items():
+    for item_id, item_data in available_items.items():
         view = ShopItemRow(ctx.author.id, item_id, item_data)
         embed = discord.Embed(
             title=item_data["name"],
             description=f"{item_data['description']}\nPrice: {item_data['price']} coins",
             color=discord.Color.blurple()
         )
+        
+        # Show time remaining for limited edition items
+        if item_id == "midas_touch":
+            time_left = item_data["available_until"] - current_time
+            if time_left > 0:
+                minutes = int(time_left // 60)
+                seconds = int(time_left % 60)
+                embed.add_field(
+                    name="⏳ Limited Time Offer",
+                    value=f"Available for: {minutes}m {seconds}s",
+                    inline=False
+                )
+        
         await ctx.send(embed=embed, view=view)
 
 
@@ -2350,68 +2382,78 @@ async def admin_setbal(ctx, member: discord.Member, amount: int):
 @bot.command()
 @is_admin()
 async def checkall(ctx):
-    """Export all user data including current stock levels"""
+    """Export all user data including current stock levels and event gold"""
     balances = load_balances()
     bank_data = load_bank_data()
     loans = load_loans()
     inventories = load_inventories()
     currency_prices = load_currency_prices()
-    currency_stocks = load_currency_stocks()  # ✅ NEW
+    currency_stocks = load_currency_stocks()
     
+    # Load event balances
+    try:
+        with open("event_balances.json", "r") as f:
+            event_balances = json.load(f)
+    except FileNotFoundError:
+        event_balances = {}
+
     output = ["=== MARKET DATA ==="]
     for currency in ["BobBux", "DxBux", "Gold"]:
-        # ✅ Show actual stock instead of "INF"
         output.append(f"MARKET|{currency}|{currency_prices[currency]}|{currency_stocks.get(currency, 0)}")
-    
+
     output.append("\n=== USER DATA ===")
-    all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys()) | set(inventories.keys())
-    
+    all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys()) | set(inventories.keys()) | set(event_balances.keys())
+
     for user_id in all_user_ids:
         wallet = balances.get(user_id, 1000)
         b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
         plan = b_data["plan"] or "None"
         deposited = b_data["deposited"]
-        
+
         loan_info = loans.get(user_id, {})
         has_loan = "Y" if loan_info and not loan_info.get("repaid", True) else "N"
-        
+
         inv_info = inventories.get(user_id, {})
         for currency in ["BobBux", "DxBux", "Gold"]:
             if currency not in inv_info:
                 inv_info[currency] = 0
-        
+
+        event_gold = event_balances.get(user_id, 0)
+
         inv_parts = []
         for currency in ["BobBux", "DxBux", "Gold"]:
             inv_parts.append(f"{currency}:{inv_info.get(currency, 0)}")
         inv_parts.extend(f"{k}:{v}" for k, v in inv_info.items() if k not in ["BobBux", "DxBux", "Gold"])
-        
+
+        # Add event gold to inventory string
+        inv_parts.append(f"EventGold:{event_gold}")
+
         inv_str = ",".join(inv_parts) if inv_parts else "None"
-        
+
         output.append(f"{user_id}|{wallet}|{plan}|{deposited}|{has_loan}|{inv_str}")
-    
+
     # Split into chunks if too long
     chunk_size = 1900
     chunks = []
     current_chunk = ""
-    
+
     for line in output:
         if len(current_chunk) + len(line) + 1 > chunk_size:
             chunks.append(current_chunk)
             current_chunk = line
         else:
             current_chunk += "\n" + line if current_chunk else line
-    
+
     if current_chunk:
         chunks.append(current_chunk)
-    
+
     for chunk in chunks:
         await ctx.send(f"```{chunk}```")
-
 
 @bot.command()
 @is_admin()
 async def setall(ctx, *, data: str):
-    """Import all user data including stock-aware currencies"""
+    """Import all user data including stock-aware currencies and event gold"""
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
 
@@ -2420,8 +2462,9 @@ async def setall(ctx, *, data: str):
     bank_data = {}
     loans = {}
     inventories = {}
+    event_balances = {}  # NEW
     currency_prices = load_currency_prices()
-    currency_stocks = load_currency_stocks()  # ✅ load current stock
+    currency_stocks = load_currency_stocks()
 
     current_section = None
 
@@ -2439,17 +2482,17 @@ async def setall(ctx, *, data: str):
 
         if current_section == "market" and line.startswith("MARKET|"):
             parts = line.split('|')
-            if len(parts) >= 4:  # ✅ Price and Stock
+            if len(parts) >= 4:
                 currency = parts[1]
                 try:
                     currency_prices[currency] = int(parts[2])
-                    currency_stocks[currency] = int(parts[3])  # ✅ stock update
+                    currency_stocks[currency] = int(parts[3])
                 except (ValueError, KeyError):
                     continue
 
         elif current_section == "user":
             parts = line.split('|')
-            if len(parts) >= 5:
+            if len(parts) >= 6:
                 try:
                     user_id = parts[0].strip()
                     wallet = int(float(parts[1].strip()))
@@ -2476,12 +2519,19 @@ async def setall(ctx, *, data: str):
                         }
 
                     inv_items = {}
+                    event_gold_amount = 0  # NEW: store event gold here
+
                     if inventory.lower() != "none":
                         for item_str in inventory.split(','):
                             if ':' in item_str:
                                 item_name, quantity = item_str.split(':')
+                                item_name = item_name.strip()
+                                quantity = quantity.strip()
                                 try:
-                                    inv_items[item_name.strip()] = int(quantity)
+                                    if item_name.lower() == "eventgold":
+                                        event_gold_amount = int(quantity)
+                                    else:
+                                        inv_items[item_name] = int(quantity)
                                 except ValueError:
                                     continue
 
@@ -2491,6 +2541,7 @@ async def setall(ctx, *, data: str):
                                 inv_items[currency] = 0
 
                     inventories[user_id] = inv_items
+                    event_balances[user_id] = event_gold_amount  # NEW
 
                 except (ValueError, IndexError) as e:
                     print(f"Error processing line: {line} - {e}")
@@ -2501,11 +2552,15 @@ async def setall(ctx, *, data: str):
     save_loans(loans)
     save_inventories(inventories)
     save_currency_prices(currency_prices)
-    save_currency_stocks(currency_stocks)  # ✅ persist stock updates
+    save_currency_stocks(currency_stocks)
+    
+    # Save event balances too
+    with open("event_balances.json", "w") as f:
+        json.dump(event_balances, f, indent=4)
 
     embed = discord.Embed(
         title="✅ Data Import Complete",
-        description="Successfully imported economy data including stocks",
+        description="Successfully imported economy data including stocks and event gold",
         color=discord.Color.green()
     )
 
@@ -2536,6 +2591,194 @@ async def setall(ctx, *, data: str):
     await ctx.send(embed=embed)
 
 
+#------------------ EVENTS ------------------------
+
+
+def add_event_gold(user_id, amount):
+    try:
+        with open("event_balances.json", "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+
+    user_id = str(user_id)
+    data[user_id] = data.get(user_id, 0) + amount
+
+    with open("event_balances.json", "w") as f:
+        json.dump(data, f, indent=4)
+
+
+class GreedGloryView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.gold_collected = 0
+        self.round = 1
+
+    @discord.ui.button(label="Go Deeper 🔽", style=discord.ButtonStyle.primary)
+    async def go_deeper(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("🚫 This is not your game!", ephemeral=True)
+            return
+
+        # 25% trap chance
+        if random.random() < 0.10:
+            await interaction.response.edit_message(embed=discord.Embed(
+                title="💀 Trapped!",
+                description=f"A trap was triggered! You lost **{self.gold_collected} event gold**.",
+                color=discord.Color.red()
+            ), view=None)
+            return
+
+        earned = random.randint(150, 700)
+        self.gold_collected += earned
+        self.round += 1
+
+        embed = discord.Embed(
+            title=f"🪙 Round {self.round}",
+            description=(
+                f"You found **{earned} event gold!**\n"
+                f"Total collected: **{self.gold_collected} event gold**\n\n"
+                "Do you risk it for more, or take what you’ve got?"
+            ),
+            color=discord.Color.gold()
+        )
+        embed.set_footer(text="Trap chance: 10% per round")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="Take Gold 💸", style=discord.ButtonStyle.success)
+    async def take_gold(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("🚫 This is not your game!", ephemeral=True)
+            return
+
+        add_event_gold(self.user_id, self.gold_collected)
+
+        embed = discord.Embed(
+            title="🏆 You Escaped!",
+            description=f"You escaped with **{self.gold_collected} event gold!**",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+@bot.command()
+async def eventbal(ctx):
+    try:
+        with open("event_balances.json", "r") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {}
+
+    user_id = str(ctx.author.id)
+    event_gold = data.get(user_id, 0)
+
+    embed = discord.Embed(
+        title="🏅 Event Gold Balance",
+        description=f"You currently have **{event_gold} event gold**.",
+        color=discord.Color.gold()
+    )
+    await ctx.send(embed=embed)
+
+EVENT_SHOP = {
+    "Golden Sword": 10000,
+    "Golden Dice": 5000,
+    "Golden Price Tag": 8000
+}
+
+def add_item(user_id, item_name, quantity):
+    try:
+        with open("inventories.json", "r") as f:
+            inventories = json.load(f)
+    except FileNotFoundError:
+        inventories = {}
+
+    user_id = str(user_id)
+    if user_id not in inventories:
+        inventories[user_id] = {}
+
+    inventories[user_id][item_name] = inventories[user_id].get(item_name, 0) + quantity
+
+    with open("inventories.json", "w") as f:
+        json.dump(inventories, f, indent=4)
+class EventShopView(discord.ui.View):
+    def __init__(self, user_id):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.add_item(EventShopDropdown(user_id))
+
+class EventShopDropdown(discord.ui.Select):
+    def __init__(self, user_id):
+        self.user_id = user_id
+        options = [
+            discord.SelectOption(label=item, description=f"{cost} event gold")
+            for item, cost in EVENT_SHOP.items()
+        ]
+        super().__init__(placeholder="Choose an item to buy", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("🚫 This isn't your shop!", ephemeral=True)
+            return
+
+        item = self.values[0]
+        cost = EVENT_SHOP[item]
+
+        # Load event balances
+        try:
+            with open("event_balances.json", "r") as f:
+                event_data = json.load(f)
+        except FileNotFoundError:
+            event_data = {}
+
+        user_id = str(self.user_id)
+        user_gold = event_data.get(user_id, 0)
+
+        if user_gold < cost:
+            await interaction.response.send_message(
+                f"❌ Not enough event gold! You need {cost}, but have {user_gold}.",
+                ephemeral=True
+            )
+            return
+
+        # Deduct event gold and add item
+        event_data[user_id] = user_gold - cost
+        with open("event_balances.json", "w") as f:
+            json.dump(event_data, f, indent=4)
+
+        add_item(user_id, item, 1)
+
+        await interaction.response.send_message(
+            f"✅ You bought **{item}** for **{cost} event gold**!", ephemeral=True
+        )
+
+@bot.command()
+async def eventshop(ctx):
+    embed = discord.Embed(
+        title="🛒 Event Shop",
+        description="Spend your event gold on exclusive items!",
+        color=discord.Color.orange()
+    )
+    for name, cost in EVENT_SHOP.items():
+        embed.add_field(name=name, value=f"{cost} event gold", inline=False)
+
+    view = EventShopView(ctx.author.id)
+    await ctx.send(embed=embed, view=view)
+
+@bot.command()
+async def event(ctx):
+    embed = discord.Embed(
+        title="💰 Greed or Glory!",
+        description=(
+            "You enter the Vault of Midas...\n"
+            "Each step earns more event gold, but one trap and it's all gone.\n\n"
+            "Choose: Go deeper for more riches, or escape with what you have."
+        ),
+        color=discord.Color.gold()
+    )
+    embed.set_footer(text="Trap chance: 10% per round")
+    view = GreedGloryView(user_id=ctx.author.id)
+    await ctx.send(embed=embed, view=view)
+
 
 #------------------BACKGROUND TASKS------------------------
 
@@ -2549,6 +2792,23 @@ def restock_all_currencies(amount=100, max_stock=10000):
 @tasks.loop(minutes=10)
 async def stock_restock_task():
     restock_all_currencies()
+@tasks.loop(minutes=5)
+async def process_midas_touch():
+    inventories = load_inventories()
+    currency_prices = load_currency_prices()
+    
+    for user_id, inv in inventories.items():
+        if inv.get("midas_touch", 0) > 0:  # Check if user has the item
+            balance = get_balance(int(user_id))
+            if balance >= 100:
+                # Deduct coins and add gold
+                set_balance(int(user_id), balance - 100)
+                inv["Gold"] = inv.get("Gold", 0) + 100
+                
+                # Track conversions in the inventory
+                inv["midas_converted"] = inv.get("midas_converted", 0) + 100
+                
+    save_inventories(inventories)
 
 @bot.event
 async def on_ready():
@@ -2556,8 +2816,8 @@ async def on_ready():
     restock_all_currencies()  # Instant restock on startup
     if not stock_restock_task.is_running():
         stock_restock_task.start()
-
-
+    if not process_midas_touch.is_running():
+        process_midas_touch.start()
 
 # ------------------ KEEP ALIVE (FLASK) ------------------
 
@@ -2577,4 +2837,4 @@ def keep_alive():
 # ------------------ RUN BOT ------------------
 
 keep_alive()
-bot.run(os.getenv("DISCORD_TOKEN"))
+bot.run(os.getenv("DISCORD_TOKEN")
