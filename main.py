@@ -2837,4 +2837,4 @@ def keep_alive():
 # ------------------ RUN BOT ------------------
 
 keep_alive()
-bot.run(os.getenv("DISCORD_TOKEN")
+bot.run(os.getenv("DISCORD_TOKEN"))
