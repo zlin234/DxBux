@@ -1190,15 +1190,15 @@ def load_shop_items():
                 "max_stack": 1,
                 "usable": True
             },
-            "midas_touch": {
-                "name": "Midas's Touch",
-                "price": 5000,
-                "description": "Turns 100 coins into 100 gold every 5 minutes (limited edition)",
-                "max_stack": 1,
-                "usable": False,
-                "limited_edition": True,
-                "available_until": time.time() + 3600  # Available for 1 hour after launch
-            }
+#            "midas_touch": {
+#                "name": "Midas's Touch",
+#                "price": 5000,
+#                "description": "Turns 100 coins into 100 gold every 5 minutes (limited edition)",
+#                "max_stack": 1,
+#                "usable": False,
+#                "limited_edition": True,
+#                "available_until": time.time() + 3600  # Available for 1 hour after launch
+#            }
         }
         save_shop_items(shop_items)
     
