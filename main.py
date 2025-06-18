@@ -2383,6 +2383,15 @@ async def admin_setbal(ctx, member: discord.Member, amount: int):
 @is_admin()
 async def checkall(ctx):
     """Export all user data including current stock levels and event gold"""
+    def safe_convert(value):
+        """Convert values safely handling scientific notation and large numbers"""
+        try:
+            if isinstance(value, str) and 'e' in value.lower():
+                return int(float(value))
+            return int(value)
+        except (ValueError, TypeError):
+            return 0
+
     balances = load_balances()
     bank_data = load_bank_data()
     loans = load_loans()
@@ -2399,31 +2408,42 @@ async def checkall(ctx):
 
     output = ["=== MARKET DATA ==="]
     for currency in ["BobBux", "DxBux", "Gold"]:
-        output.append(f"MARKET|{currency}|{currency_prices[currency]}|{currency_stocks.get(currency, 0)}")
+        price = safe_convert(currency_prices.get(currency, 0))
+        stock = safe_convert(currency_stocks.get(currency, 0))
+        output.append(f"MARKET|{currency}|{price}|{stock}")
 
     output.append("\n=== USER DATA ===")
     all_user_ids = set(balances.keys()) | set(bank_data.keys()) | set(loans.keys()) | set(inventories.keys()) | set(event_balances.keys())
 
     for user_id in all_user_ids:
-        wallet = balances.get(user_id, 1000)
+        wallet = safe_convert(balances.get(user_id, 1000))
+        
         b_data = bank_data.get(user_id, {"plan": None, "deposited": 0})
         plan = b_data["plan"] or "None"
-        deposited = b_data["deposited"]
+        deposited = safe_convert(b_data["deposited"])
 
         loan_info = loans.get(user_id, {})
         has_loan = "Y" if loan_info and not loan_info.get("repaid", True) else "N"
 
         inv_info = inventories.get(user_id, {})
+        # Ensure all standard currencies exist in inventory
         for currency in ["BobBux", "DxBux", "Gold"]:
             if currency not in inv_info:
                 inv_info[currency] = 0
 
-        event_gold = event_balances.get(user_id, 0)
+        event_gold = safe_convert(event_balances.get(user_id, 0))
 
         inv_parts = []
+        # Add standard currencies first
         for currency in ["BobBux", "DxBux", "Gold"]:
-            inv_parts.append(f"{currency}:{inv_info.get(currency, 0)}")
-        inv_parts.extend(f"{k}:{v}" for k, v in inv_info.items() if k not in ["BobBux", "DxBux", "Gold"])
+            inv_parts.append(f"{currency}:{safe_convert(inv_info.get(currency, 0))}")
+        
+        # Add other inventory items
+        inv_parts.extend(
+            f"{k}:{safe_convert(v)}" 
+            for k, v in inv_info.items() 
+            if k not in ["BobBux", "DxBux", "Gold"]
+        )
 
         # Add event gold to inventory string
         inv_parts.append(f"EventGold:{event_gold}")
@@ -2447,7 +2467,9 @@ async def checkall(ctx):
     if current_chunk:
         chunks.append(current_chunk)
 
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks, 1):
+        if len(chunks) > 1:
+            chunk = f"=== PART {i}/{len(chunks)} ===\n{chunk}"
         await ctx.send(f"```{chunk}```")
 
 @bot.command()
