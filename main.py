@@ -2289,7 +2289,6 @@ class BalanceView(discord.ui.View):
                 pass
 
 
-
 @bot.command(aliases=["lb"])
 async def leaderboard(ctx, type: str = "wallet"):
     """Show the wealth leaderboard (wallet, bank, or total)"""
@@ -2303,7 +2302,7 @@ async def leaderboard(ctx, type: str = "wallet"):
     # Prepare leaderboard data
     lb_data = []
     for user_id, balance in balances.items():
-        bank_amount = bank_data.get(user_id, {}).get("deposited", 0)
+        bank_amount = bank_data.get(str(user_id), {}).get("deposited", 0)
         if type == "wallet":
             amount = balance
         elif type == "bank":
@@ -2318,10 +2317,10 @@ async def leaderboard(ctx, type: str = "wallet"):
         except:
             name = f"User {user_id}"
 
-        lb_data.append((name, amount))
+        lb_data.append((user_id, name, amount))  # Store user_id along with name and amount
 
     # Sort and get top 10
-    lb_data.sort(key=lambda x: x[1], reverse=True)
+    lb_data.sort(key=lambda x: x[2], reverse=True)  # Sort by amount (index 2)
     top_10 = lb_data[:10]
 
     # Create embed
@@ -2330,7 +2329,7 @@ async def leaderboard(ctx, type: str = "wallet"):
         color=discord.Color.gold()
     )
 
-    for i, (name, amount) in enumerate(top_10, 1):
+    for i, (_, name, amount) in enumerate(top_10, 1):
         embed.add_field(
             name=f"{i}. {name}",
             value=f"{amount:,} coins",
@@ -2339,24 +2338,25 @@ async def leaderboard(ctx, type: str = "wallet"):
 
     # Add current user's position if not in top 10
     current_user_id = str(ctx.author.id)
-    if current_user_id in balances:
-        current_pos = next(
-            (i+1 for i, (uid, _) in enumerate(lb_data) if uid == ctx.author.display_name),
-            len(lb_data)
+    current_pos = None
+    current_amount = 0
+    
+    # Find the current user's position
+    for i, (user_id, _, amount) in enumerate(lb_data, 1):
+        if user_id == current_user_id:
+            current_pos = i
+            current_amount = amount
+            break
+
+    if current_pos and current_pos > 10:
+        embed.add_field(
+            name=f"Your Position: #{current_pos}",
+            value=f"{current_amount:,} coins",
+            inline=False
         )
-        current_amount = next(
-            (amt for uid, amt in lb_data if uid == ctx.author.display_name),
-            0
-        )
-        
-        if current_pos > 10:
-            embed.add_field(
-                name=f"Your Position: #{current_pos}",
-                value=f"{current_amount:,} coins",
-                inline=False
-            )
 
     await ctx.send(embed=embed)
+
 
 # ------------------ ADMIN CHECK DECORATOR ------------------
 
@@ -2452,8 +2452,29 @@ async def checkall(ctx):
 
 @bot.command()
 @is_admin()
-async def setall(ctx, *, data: str):
-    """Import all user data including stock-aware currencies and event gold"""
+async def setall(ctx, *, data: str = None):
+    """Import all user data including stock-aware currencies and event gold
+    Usage: 
+    - Paste the data directly after the command
+    - Or attach a .txt file with the data
+    """
+    # Check for file attachment if no text data provided
+    if data is None and ctx.message.attachments:
+        attachment = ctx.message.attachments[0]
+        if not attachment.filename.lower().endswith('.txt'):
+            return await ctx.send("❌ Please upload a .txt file")
+        
+        try:
+            file_content = await attachment.read()
+            data = file_content.decode('utf-8')
+        except Exception as e:
+            return await ctx.send(f"❌ Error reading file: {e}")
+    
+    # If still no data, show help
+    if data is None:
+        return await ctx.send("❌ Please provide data either as text or in a .txt file attachment")
+
+    # Clean the input data
     if data.startswith('```') and data.endswith('```'):
         data = data[3:-3].strip()
 
@@ -2462,7 +2483,7 @@ async def setall(ctx, *, data: str):
     bank_data = {}
     loans = {}
     inventories = {}
-    event_balances = {}  # NEW
+    event_balances = {}
     currency_prices = load_currency_prices()
     currency_stocks = load_currency_stocks()
 
@@ -2519,7 +2540,7 @@ async def setall(ctx, *, data: str):
                         }
 
                     inv_items = {}
-                    event_gold_amount = 0  # NEW: store event gold here
+                    event_gold_amount = 0
 
                     if inventory.lower() != "none":
                         for item_str in inventory.split(','):
@@ -2535,18 +2556,19 @@ async def setall(ctx, *, data: str):
                                 except ValueError:
                                     continue
 
+                    # Ensure all currencies exist in inventory
                     for currency in ["BobBux", "DxBux", "Gold"]:
                         if currency not in inv_items:
-                            if not any(c in inventory for c in ["BobBux", "DxBux", "Gold"]):
-                                inv_items[currency] = 0
+                            inv_items[currency] = 0
 
                     inventories[user_id] = inv_items
-                    event_balances[user_id] = event_gold_amount  # NEW
+                    event_balances[user_id] = event_gold_amount
 
                 except (ValueError, IndexError) as e:
                     print(f"Error processing line: {line} - {e}")
                     continue
 
+    # Save all data
     save_balances(balances)
     save_bank_data(bank_data)
     save_loans(loans)
@@ -2554,10 +2576,11 @@ async def setall(ctx, *, data: str):
     save_currency_prices(currency_prices)
     save_currency_stocks(currency_stocks)
     
-    # Save event balances too
+    # Save event balances
     with open("event_balances.json", "w") as f:
         json.dump(event_balances, f, indent=4)
 
+    # Create success embed
     embed = discord.Embed(
         title="✅ Data Import Complete",
         description="Successfully imported economy data including stocks and event gold",
@@ -2589,7 +2612,6 @@ async def setall(ctx, *, data: str):
     )
 
     await ctx.send(embed=embed)
-
 
 #------------------ EVENTS ------------------------
 
